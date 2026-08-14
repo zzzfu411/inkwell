@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <link rel="icon" href="data:;base64,iVBORw0KGgo=" />
+  <title>Inkwell · 墨稿 · 创作与叙事分析</title>
+  <script src="theme-init.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="app">
+    <header class="topbar" aria-label="全局工具栏">
+      <div class="brand">
+        <span class="brand-mark">墨</span>
+        <div class="brand-copy">
+          <h1>Inkwell</h1>
+          <p class="brand-sub">墨稿 · 长篇叙事编辑台</p>
+        </div>
+      </div>
+      <div class="book-context">
+        <button type="button" class="btn book-drawer-trigger" id="btnToggleLibrary" aria-controls="libraryRail" aria-expanded="false" aria-label="打开书库">
+          <span class="ui-icon icon-library" aria-hidden="true"></span>
+          <span class="book-trigger-copy">书库</span>
+        </button>
+        <select id="projectSelect" class="select project-select" title="本地书库中的作品" aria-label="当前作品"></select>
+      </div>
+      <nav class="nav-modes" aria-label="主要工作区">
+        <button type="button" class="mode active" data-mode="write" data-section="write" aria-current="page"><span class="ui-icon icon-write" aria-hidden="true"></span><span>写作</span></button>
+        <button type="button" class="mode" data-mode="control" data-section="story" aria-current="false"><span class="ui-icon icon-story" aria-hidden="true"></span><span>故事</span></button>
+        <button type="button" class="mode" data-mode="workspace" data-section="workspace" aria-current="false"><span class="ui-icon icon-files" aria-hidden="true"></span><span>资料</span></button>
+        <button type="button" class="mode" data-mode="analyze" data-section="analyze" aria-current="false"><span class="ui-icon icon-analysis" aria-hidden="true"></span><span>分析</span></button>
+      </nav>
+      <div class="topbar-actions">
+        <div class="vault-search-wrap top-search">
+          <label class="sr-only" for="vaultSearch">搜索当前书库</label>
+          <span class="ui-icon icon-search" aria-hidden="true"></span>
+          <input type="search" id="vaultSearch" class="vault-search" placeholder="搜索故事与资料…" autocomplete="off" />
+          <div id="searchHits" class="search-hits" hidden></div>
+        </div>
+        <button type="button" class="vault-status global-status" id="vaultStatus" aria-live="polite" title="查看连接详情">书库未连接</button>
+        <details class="utility-menu" id="utilityMenu">
+          <summary class="btn icon ghost" aria-label="打开书库工具" title="书库工具"><span class="ui-icon icon-tools" aria-hidden="true"></span></summary>
+          <div class="utility-popover">
+            <div class="utility-heading">
+              <strong>书库工具</strong>
+              <span class="vault-ver" id="appVersion">v0.19.0</span>
+            </div>
+            <div class="utility-path">
+              <span class="vault-path" id="vaultPathLabel" title="">—</span>
+              <span class="vault-path-full" id="vaultPathFull" title="">—</span>
+            </div>
+            <div class="utility-grid">
+              <button type="button" class="btn ghost" id="btnNewProject" title="在 vault/books/ 下新建小说文件夹">新建书</button>
+              <button type="button" class="btn ghost" id="btnImportSeed" title="导入示例并写入本地书库">导入示例</button>
+              <button type="button" class="btn ghost" id="btnOpenVault" title="用资源管理器打开当前书文件夹">打开目录</button>
+              <button type="button" class="btn ghost" id="btnReloadDisk" title="从磁盘重读外部修改">重新载入</button>
+              <button type="button" class="btn ghost" id="btnMigrate" title="把浏览器旧缓存迁入 vault">迁入旧稿</button>
+              <button type="button" class="btn ghost" id="btnExport" title="写盘并导出合并 Markdown">导出全书</button>
+              <button type="button" class="btn ghost" id="btnOpenVaultDir" title="选择已有文件夹作为书库">打开书库</button>
+              <button type="button" class="btn ghost" id="btnNewVaultDir" title="在指定路径新建书库">新建书库</button>
+              <button type="button" class="btn ghost" id="btnCopyVaultPath" title="复制书库绝对路径">复制路径</button>
+            </div>
+            <span class="kbd-hint">Ctrl+S 保存 · Ctrl+1–4 切换工作区</span>
+          </div>
+        </details>
+        <button type="button" class="btn icon settings-trigger" id="btnSettings" aria-label="打开设置" title="设置"><span class="ui-icon icon-settings" aria-hidden="true"></span></button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <button type="button" class="drawer-scrim" id="libraryScrim" aria-label="关闭书库" tabindex="-1"></button>
+      <aside class="library-rail" id="libraryRail" aria-hidden="true" aria-label="书库抽屉" inert>
+        <div class="library-head">
+          <h2>书库</h2>
+          <div class="panel-head-actions">
+            <button type="button" class="btn icon ghost xs" id="btnLibRefresh" aria-label="重新扫描书库" title="重新扫描"><span class="ui-icon icon-refresh" aria-hidden="true"></span></button>
+            <button type="button" class="btn ghost xs" id="btnCloseLibrary" aria-label="关闭书库">关闭</button>
+          </div>
+        </div>
+        <div class="library-filter-wrap">
+          <input type="search" id="libFilter" class="library-filter" placeholder="筛选书名…" autocomplete="off" />
+        </div>
+        <ul class="library-list" id="libraryList"></ul>
+        <div class="library-empty empty-state" id="libraryEmptyState" hidden>
+          <span class="empty-kicker" id="libraryEmptyKicker">还没有可写的作品</span>
+          <strong id="libraryEmptyTitle">建立一本新书，或连接已有书库。</strong>
+          <p class="empty-description" id="libraryEmptyHint"></p>
+          <div class="empty-actions" id="libraryEmptyActions">
+            <button type="button" class="btn primary" data-library-action="new">新建书</button>
+            <button type="button" class="btn" data-library-action="open">打开书库</button>
+            <button type="button" class="btn ghost" data-library-action="sample">导入示例</button>
+            <button type="button" class="btn ghost" data-library-action="clear" hidden>清除筛选</button>
+          </div>
+        </div>
+        <div class="library-foot">
+          <button type="button" class="btn ghost block" id="btnSnapshot" title="手动创建快照">创建快照</button>
+          <button type="button" class="btn ghost block" id="btnWsSnapshots" title="查看并恢复历史快照">快照列表</button>
+        </div>
+      </aside>
+      <div class="shell-main">
+
+    <!-- WORKSPACE · Obsidian-like -->
+    <section class="view" id="view-workspace">
+      <div class="ws-layout">
+        <aside class="ws-sidebar collapsible-panel" id="wsFilesDrawer" data-panel="wsFiles" data-panel-title="文件" aria-label="资料文件">
+          <div class="ws-side-head">
+            <h2>文件</h2>
+            <div class="ws-side-actions">
+              <button type="button" class="btn icon ghost xs" id="btnWsRefreshTree" aria-label="刷新文件树" title="刷新文件树"><span class="ui-icon icon-refresh" aria-hidden="true"></span></button>
+              <button type="button" class="btn icon ghost xs" id="btnWsReveal" aria-label="在资源管理器中显示" title="在资源管理器中显示"><span class="ui-icon icon-folder-open" aria-hidden="true"></span></button>
+            </div>
+          </div>
+          <div class="ws-fs-toolbar">
+            <button type="button" class="btn ghost xs" id="btnWsNewNote" title="在章节/下新建 md">新建笔记</button>
+            <button type="button" class="btn ghost xs" id="btnWsNewFolder" title="新建文件夹">新建文件夹</button>
+            <button type="button" class="btn ghost xs" id="btnWsRename" title="重命名选中项">重命名</button>
+            <button type="button" class="btn ghost xs danger-text" id="btnWsDelete" title="删除选中项">删除</button>
+          </div>
+          <div class="ws-tree" id="wsTree"></div>
+        </aside>
+        <button type="button" class="ws-drawer-scrim" id="wsFilesScrim" aria-label="关闭资料文件"></button>
+        <div class="ws-main">
+          <div class="ws-toolbar">
+            <button type="button" class="btn icon ghost ws-drawer-toggle" id="btnWsToggleFiles" aria-label="打开资料文件" aria-controls="wsFilesDrawer" aria-expanded="false" title="资料文件"><span class="ui-icon icon-files" aria-hidden="true"></span></button>
+            <div class="ws-file-info">
+              <strong id="wsFilePath">未打开文件</strong>
+              <span id="wsFileMeta" class="ws-meta"></span>
+            </div>
+            <div class="ws-toolbar-actions">
+              <div class="ws-split-tog" role="tablist" aria-label="资料显示方式">
+                <button type="button" class="btn ghost xs" id="ws-tab-editor" data-split="editor" role="tab" aria-selected="false" aria-controls="wsEditorPane" tabindex="-1">编辑</button>
+                <button type="button" class="btn ghost xs active" id="ws-tab-both" data-split="both" role="tab" aria-selected="true" aria-controls="wsEditorPane wsPreviewPane" tabindex="0">分栏</button>
+                <button type="button" class="btn ghost xs" id="ws-tab-preview" data-split="preview" role="tab" aria-selected="false" aria-controls="wsPreviewPane" tabindex="-1">预览</button>
+              </div>
+              <button type="button" class="btn ghost" id="btnWsReload">重载</button>
+              <button type="button" class="btn primary" id="btnWsSave">保存</button>
+            </div>
+          </div>
+          <div class="ws-panes">
+              <div class="ws-pane" id="wsEditorPane" role="tabpanel" aria-labelledby="ws-tab-both">
+              <textarea id="wsEditor" class="ws-editor" spellcheck="true" placeholder="从左侧打开 md / json 文件…"></textarea>
+            </div>
+              <div class="ws-pane ws-preview-wrap" id="wsPreviewPane" role="tabpanel" aria-labelledby="ws-tab-preview">
+              <div id="wsPreview" class="ws-preview md-body"></div>
+            </div>
+          </div>
+          <div class="ws-footer">
+            <span class="ws-status" id="wsStatus" role="status" aria-live="polite" aria-atomic="true">选择一本书后显示文件树</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PIPELINE -->
+    <section class="view" id="view-pipeline">
+      <nav class="story-subnav" aria-label="故事工作区">
+        <span class="story-subnav-label">故事中心</span>
+        <button type="button" class="story-submode active" data-go-mode="pipeline" aria-current="page">策划</button>
+        <button type="button" class="story-submode" data-go-mode="control">主线与任务</button>
+        <button type="button" class="story-submode" data-go-mode="graph">人物关系</button>
+      </nav>
+      <div class="pipe-layout">
+        <div class="pipe-main">
+          <h2 class="view-title">从选题到任务板</h2>
+          <p class="lede">先把卖点、世界、人物和任务写清楚，再交给写章台。每一步都可以改完再锁定，下一章只会带走你确认过的约束。</p>
+
+          <label class="field">
+            <span>你的选题意向（题材 / 受众 / 必有元素）</span>
+            <textarea id="ideaInput" class="input area" rows="3" placeholder="例：都市高武，女主能听见死者遗言，先抑后扬，要有公司权谋和灵异双线，禁止无脑无剧情的打卡升级。"></textarea>
+          </label>
+          <div class="row2">
+            <label class="field">
+              <span>目标章数（先出详细任务）</span>
+              <input id="targetChapters" class="input" type="number" min="8" max="200" value="20" />
+            </label>
+            <label class="field">
+              <span>作者补充（可选）</span>
+              <input id="authorNote" class="input" placeholder="必须出现的桥段、对标作品、尺度……" />
+            </label>
+          </div>
+          <h3 class="subhead">风格圣经 · 跨对话保持声线</h3>
+          <div class="lock-grid">
+            <label class="field"><span>叙述视角</span><input id="stylePov" class="input" placeholder="第三人称限知" /></label>
+            <label class="field"><span>时态</span><input id="styleTense" class="input" placeholder="过去时/现在时" /></label>
+            <label class="field"><span>节奏</span><textarea id="stylePacing" class="input area" rows="2" placeholder="短段落；少用解释性旁白"></textarea></label>
+            <label class="field"><span>对白</span><textarea id="styleDialogue" class="input area" rows="2" placeholder="对白推进冲突；人物声线有别"></textarea></label>
+            <label class="field"><span>风格规则（每行一条）</span><textarea id="styleRules" class="input area" rows="3"></textarea></label>
+            <label class="field"><span>禁用表达（每行一条）</span><textarea id="styleForbidden" class="input area" rows="3"></textarea></label>
+            <label class="field"><span>作者确认的风格样例（空行分段）</span><textarea id="styleExamples" class="input area" rows="4"></textarea></label>
+          </div>
+
+          <div class="pipe-steps" id="pipeSteps">
+            <div class="step" data-step="pitch"><span class="n">1</span>立项卖点</div>
+            <div class="step" data-step="world"><span class="n">2</span>世界观</div>
+            <div class="step" data-step="cast"><span class="n">3</span>人物关系</div>
+            <div class="step" data-step="spine"><span class="n">4</span>主线任务板</div>
+            <div class="step" data-step="ready"><span class="n">5</span>待你确认</div>
+          </div>
+
+          <div class="pipe-actions">
+            <button type="button" class="btn primary" id="btnRunPlan"><span class="ui-icon icon-play" aria-hidden="true"></span>一键全自动策划</button>
+            <button type="button" class="btn" id="btnStepPitch">只跑立项</button>
+            <button type="button" class="btn" id="btnStepWorld">只跑世界</button>
+            <button type="button" class="btn" id="btnStepCast">只跑人物</button>
+            <button type="button" class="btn" id="btnStepSpine">只跑主线</button>
+            <button type="button" class="btn danger ghost" id="btnStopPipe" hidden disabled>停止</button>
+          </div>
+
+          <div class="preview-card">
+            <h3>策划预览</h3>
+            <div id="planPreview" class="preview-body">尚未生成。填写意向后点「一键全自动策划」。</div>
+          </div>
+        </div>
+        <aside class="pipe-side collapsible-panel" data-panel="pipeSide" data-panel-title="流水线">
+          <div class="panel-side-head"><h2 class="panel-side-title">流水线</h2></div>
+          <div class="panel-side-body">
+            <h3>流水线日志</h3>
+            <div id="pipeLog" class="log-scroll"></div>
+            <button type="button" class="btn block" id="btnGoControl">确认并去主线掌控</button>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- CONTROL -->
+    <section class="view" id="view-control">
+      <nav class="story-subnav" aria-label="故事工作区">
+        <span class="story-subnav-label">故事中心</span>
+        <button type="button" class="story-submode" data-go-mode="pipeline">策划</button>
+        <button type="button" class="story-submode active" data-go-mode="control" aria-current="page">主线与任务</button>
+        <button type="button" class="story-submode" data-go-mode="graph">人物关系</button>
+      </nav>
+      <div class="control-layout">
+        <div class="control-main">
+          <h2 class="view-title">主线掌控 · 防止写偏</h2>
+          <p class="lede">把「不可改」的东西锁死；章任务可改、可重排、可作废。自动写章会强制注入锁定内容。</p>
+
+          <section class="story-overview" aria-label="故事概览">
+            <div><span>当前进度</span><strong id="storyProgress">尚未开始</strong></div>
+            <div><span>下一任务</span><strong id="storyNextTask">待建立</strong></div>
+            <button type="button" data-inspector-target="memory"><span>开放伏笔</span><strong id="storyOpenLoops">0</strong></button>
+            <button type="button" data-inspector-target="continuity"><span>高风险</span><strong id="storyHighRisks">0</strong></button>
+            <div><span>主角位置</span><strong id="storyProtagonist">待更新</strong></div>
+          </section>
+
+          <div class="lock-grid">
+            <label class="field grow">
+              <span>锁定主线 logline（最高优先级）</span>
+              <textarea id="lockLogline" class="input area" rows="2" placeholder="一句话主线，AI 不得违背"></textarea>
+            </label>
+            <label class="field">
+              <span>全局禁区（每行一条）</span>
+              <textarea id="lockForbidden" class="input area" rows="2" placeholder="禁止无脑升级&#10;禁止让反派无代价洗白"></textarea>
+            </label>
+            <label class="field">
+              <span>必须兑现（每行一条）</span>
+              <textarea id="lockMust" class="input area" rows="2" placeholder="第三卷前必须揭示身世&#10;女主与男主保持平等合作"></textarea>
+            </label>
+          </div>
+          <div class="row2">
+            <label class="checkline"><input type="checkbox" id="lockWorld" /> 锁定世界观（策划不再覆盖）</label>
+            <label class="checkline"><input type="checkbox" id="lockCast" /> 锁定人物关系图</label>
+            <label class="checkline"><input type="checkbox" id="lockSpine" /> 锁定任务板结构</label>
+          </div>
+          <div class="pipe-actions">
+            <button type="button" class="btn" id="btnSaveLocks">保存锁定</button>
+            <button type="button" class="btn" id="btnSteer">用批注纠偏任务板</button>
+          </div>
+          <label class="field">
+            <span>作者批注（纠偏）</span>
+            <textarea id="steerNote" class="input area" rows="2" placeholder="例：男主不能太无脑；第5章必须让女主先救男主；删掉废龙套线……"></textarea>
+          </label>
+
+          <h3 class="subhead">章任务板</h3>
+          <div class="task-toolbar">
+            <button type="button" class="btn" id="btnAddTask"><span class="ui-icon icon-plus" aria-hidden="true"></span>任务</button>
+            <button type="button" class="btn primary" id="btnAutoWrite"><span class="ui-icon icon-play" aria-hidden="true"></span>按任务自动连写</button>
+            <button type="button" class="btn danger ghost" id="btnStopAuto" hidden disabled>停止连写</button>
+            <span class="chip muted" id="autoStatus">空闲</span>
+          </div>
+          <div class="task-table-wrap">
+            <table class="task-table" id="taskTable">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>状态</th>
+                  <th>标题</th>
+                  <th>目标</th>
+                  <th>禁止</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <aside class="pipe-side collapsible-panel" data-panel="controlSide" data-panel-title="主线侧栏">
+          <div class="panel-side-head"><h2 class="panel-side-title">主线侧栏</h2></div>
+          <div class="panel-side-body">
+            <details class="story-group" open><summary>卷 / 幕脊柱</summary><div id="spineView" class="preview-body sm"></div></details>
+            <details class="story-group" open><summary>故事线</summary><div id="storylineView" class="preview-body sm"></div></details>
+            <details class="story-group">
+              <summary>细节设定</summary>
+              <div class="story-record-panel">
+                <div class="story-filterbar" role="group" aria-label="筛选 Canon 设定">
+                  <label><span>类型</span><select id="canonTypeFilter" class="select xs"><option value="">全部类型</option></select></label>
+                  <label><span>锁定状态</span><select id="canonLockFilter" class="select xs"><option value="">全部状态</option><option value="locked">已锁定</option><option value="dynamic">动态更新</option><option value="unlocked">未锁定</option><option value="superseded">已取代</option><option value="rejected">冲突已拒</option></select></label>
+                  <label class="story-evidence-filter"><span>证据章节</span><input id="canonEvidenceFilter" class="input xs" type="search" placeholder="例如：第三章" /></label>
+                  <button type="button" class="btn ghost xs" id="btnCanonClearFilters">清除</button>
+                  <span id="canonFilterStats" class="story-filter-stats" role="status"></span>
+                </div>
+                <div id="canonView" class="story-record-list"></div>
+              </div>
+            </details>
+            <details class="story-group"><summary>滚动摘要</summary><div id="memoryView" class="preview-body sm"></div></details>
+            <details class="story-group">
+              <summary>钩子生命周期</summary>
+              <div class="story-record-panel">
+                <div class="story-filterbar" role="group" aria-label="筛选伏笔">
+                  <label><span>类型</span><select id="loopTypeFilter" class="select xs"><option value="">全部类型</option></select></label>
+                  <label><span>状态</span><select id="loopStatusFilter" class="select xs"><option value="">全部状态</option><option value="open">开放</option><option value="deferred">延后</option><option value="resolved">已回收</option><option value="abandoned">已放弃</option></select></label>
+                  <label class="story-evidence-filter"><span>证据章节</span><input id="loopEvidenceFilter" class="input xs" type="search" placeholder="例如：第三章" /></label>
+                  <button type="button" class="btn ghost xs" id="btnLoopClearFilters">清除</button>
+                  <span id="loopFilterStats" class="story-filter-stats" role="status"></span>
+                </div>
+                <div id="loopView" class="story-record-list"></div>
+              </div>
+            </details>
+            <details class="story-group">
+              <summary>连续性风险</summary>
+              <div class="story-record-panel">
+                <div class="story-filterbar" role="group" aria-label="筛选连续性问题">
+                  <label><span>类型</span><select id="continuityTypeFilter" class="select xs"><option value="">全部类型</option></select></label>
+                  <label><span>状态</span><select id="continuityStatusFilter" class="select xs"><option value="">全部状态</option><option value="open">待处理</option><option value="handled">已处理</option><option value="ignored">已忽略</option></select></label>
+                  <label><span>严重度</span><select id="continuitySeverityFilter" class="select xs"><option value="">全部级别</option><option value="blocker">阻断</option><option value="major">高风险</option><option value="minor">提醒</option><option value="info">信息</option></select></label>
+                  <label class="story-evidence-filter"><span>证据章节</span><input id="continuityEvidenceFilter" class="input xs" type="search" placeholder="例如：第三章" /></label>
+                  <button type="button" class="btn ghost xs" id="btnContinuityClearFilters">清除</button>
+                  <span id="continuityFilterStats" class="story-filter-stats" role="status"></span>
+                </div>
+                <div id="continuityView" class="story-record-list"></div>
+              </div>
+            </details>
+            <details class="story-group"><summary>实体状态 / 时间线</summary><div id="entityStateView" class="preview-body sm"></div></details>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- WRITE -->
+    <section class="view active" id="view-write">
+      <div class="workspace">
+        <button type="button" class="drawer-scrim" id="writeChaptersScrim" aria-label="关闭章节列表" tabindex="-1"></button>
+        <aside class="rail rail-left collapsible-panel" id="writeChaptersDrawer" data-panel="writeChapters" data-panel-title="章节" aria-label="章节抽屉">
+          <div class="rail-head"><h2>章节</h2><div class="panel-head-actions"><button type="button" class="btn ghost xs" id="btnNewChapterFromWrite">新建</button><button type="button" class="btn icon ghost xs mobile-drawer-close" id="btnCloseChapters" aria-label="关闭章节抽屉" title="关闭"><span class="ui-icon icon-close" aria-hidden="true"></span></button></div></div>
+          <ul class="chapter-list" id="chapterList"></ul>
+          <div class="rail-foot">
+            <div class="meter"><span>全书约</span><strong id="totalWords">0</strong><span>字</span></div>
+          </div>
+        </aside>
+        <section class="stage">
+          <div class="stage-meta">
+            <button type="button" class="btn icon ghost stage-drawer-trigger chapters-trigger" id="btnOpenChapters" aria-controls="writeChaptersDrawer" aria-expanded="false" aria-label="打开章节列表" title="章节"><span class="ui-icon icon-list" aria-hidden="true"></span></button>
+            <div class="chapter-heading">
+              <input id="chapterTitle" class="chapter-title" placeholder="章节标题" aria-label="章节标题" />
+              <div class="chapter-meta-line" aria-label="章节写作状态">
+                <span id="chapterWords">0 字</span>
+                <span class="chapter-meta-separator" aria-hidden="true">·</span>
+                <span id="statusChip" role="status" aria-live="polite">就绪</span>
+                <button type="button" class="quiet-status" id="btnSaveChapter" data-state="idle" aria-describedby="chapterSaveState">
+                  <span class="sr-only">保存状态：</span><strong id="chapterSaveState" role="status" aria-live="polite" aria-atomic="true">待确认</strong>
+                </button>
+                <button type="button" class="quiet-status" id="chapterHandoffStatus" data-state="empty" data-inspector-target="memory" aria-describedby="chapterHandoffState">
+                  <span class="sr-only">章后交接：</span><strong id="chapterHandoffState">无正文</strong>
+                </button>
+              </div>
+            </div>
+            <div class="stage-tools">
+              <details class="chapter-more" id="chapterMore">
+                <summary class="btn icon ghost" aria-label="打开本章更多操作" title="本章更多操作"><span class="ui-icon icon-tools" aria-hidden="true"></span></summary>
+                <div class="chapter-more-menu">
+                  <button type="button" class="btn ghost" id="btnDigest">执行章后交接</button>
+                  <button type="button" class="btn ghost" data-go-mode="control" data-story-target="memoryView">在故事中心查看</button>
+                </div>
+              </details>
+              <button type="button" class="btn ghost xs focus-trigger" id="btnFocusMode" aria-pressed="false">专注</button>
+              <button type="button" class="btn icon ghost stage-drawer-trigger inspector-trigger" id="btnOpenInspector" aria-controls="writeTaskDrawer" aria-expanded="false" aria-label="打开故事检查器" title="故事检查器"><span class="ui-icon icon-inspect" aria-hidden="true"></span></button>
+            </div>
+          </div>
+          <div class="narrative-ribbon" id="narrativeRibbon" aria-label="本章叙事脉络">
+            <button type="button" class="ribbon-item" data-inspector-target="task"><span>任务</span><strong id="ribbonTask">未绑定</strong></button>
+            <button type="button" class="ribbon-item" data-inspector-target="task"><span>视角</span><strong id="ribbonPov">未设定</strong></button>
+            <button type="button" class="ribbon-item" data-inspector-target="memory"><span>开放伏笔</span><strong id="ribbonLoops">0</strong></button>
+            <button type="button" class="ribbon-item" data-inspector-target="continuity"><span>连续性</span><strong id="ribbonIssues">安全</strong></button>
+            <button type="button" class="ribbon-item" data-inspector-target="memory"><span>上下文</span><strong id="ribbonHealth">待评估</strong></button>
+          </div>
+          <div class="manuscript-wrap">
+            <div class="writing-welcome" id="writingWelcome" hidden>
+              <span class="writing-welcome-kicker">Inkwell · 墨稿</span>
+              <h2 id="writingWelcomeTitle">让第一句话落在纸上</h2>
+              <p id="writingWelcomeHint">先建立一个章节。之后每次回来，Inkwell 都会把你带回上次停笔的位置。</p>
+              <div class="writing-welcome-actions">
+                <button type="button" class="btn primary" data-chapter-action="new"><span class="ui-icon icon-plus" aria-hidden="true"></span>新建第一章</button>
+                <button type="button" class="btn ghost" data-go-mode="pipeline">先梳理故事</button>
+                <button type="button" class="btn ghost" data-library-action="open">打开书库</button>
+              </div>
+            </div>
+            <textarea id="manuscript" class="manuscript" placeholder="正文……自动连写会填到这里。你可随时手改，下一轮会以你的文稿为准。"></textarea>
+          </div>
+          <div class="compose-bar">
+            <div class="compose-main">
+              <div class="compose-heading">
+                <label for="instruction">AI 写作指令</label>
+                <span class="compose-selection" id="composeSelectionState" hidden></span>
+                <select id="composeMode" class="select compose-mode" aria-label="生成方式">
+                  <option value="task">按本章任务写作</option>
+                  <option value="continue">从当前位置续写</option>
+                  <option value="rewrite">重写选中段落</option>
+                  <option value="annotate">根据批注修订</option>
+                </select>
+              </div>
+              <div class="compose-input-row">
+                <textarea id="instruction" class="instruction" rows="2" placeholder="补充本轮要求，例如：加强女主主动性，让章末停在门被推开的瞬间。Ctrl+Enter 执行"></textarea>
+                <div class="compose-actions">
+                  <button type="button" class="btn primary compose-submit" id="btnGenerate">按任务写本章</button>
+                  <button type="button" class="btn danger ghost" id="btnStop" hidden disabled>停止</button>
+                  <button type="button" id="btnRewriteSel" hidden tabindex="-1" aria-hidden="true">重写选段</button>
+                </div>
+              </div>
+              <div class="generation-progress" id="generationProgress" role="status" aria-live="polite" aria-label="生成进度" hidden>
+                <span data-gen-stage="context">装配记忆</span>
+                <span data-gen-stage="model">请求模型</span>
+                <span data-gen-stage="review">连续性审查</span>
+                <span data-gen-stage="handoff">章后交接</span>
+              </div>
+              <div class="composer-review" id="composerReview" role="region" aria-labelledby="composerReviewTitle" hidden>
+                <div class="composer-review-copy">
+                  <span id="composerReviewKicker">本次生成</span>
+                  <strong id="composerReviewTitle">结果已写入正文</strong>
+                  <span id="composerReviewMeta"></span>
+                </div>
+                <div class="composer-review-actions">
+                  <button type="button" class="btn ghost xs" id="btnKeepComposerResult"><span class="ui-icon icon-check" aria-hidden="true"></span>保留结果</button>
+                  <button type="button" class="btn ghost xs" id="btnUndoComposerResult"><span class="ui-icon icon-undo" aria-hidden="true"></span>撤销本次</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <button type="button" class="drawer-scrim" id="writeTaskScrim" aria-label="关闭故事检查器" tabindex="-1"></button>
+        <aside class="rail rail-right inspector collapsible-panel" id="writeTaskDrawer" data-panel="writeTask" data-panel-title="故事检查器" aria-label="故事检查器">
+          <div class="rail-head"><h2>故事检查器</h2><button type="button" class="btn ghost xs inspector-close" id="btnCloseInspector" aria-label="关闭检查器">关闭</button></div>
+          <div class="inspector-tabs" role="tablist" aria-label="检查器内容">
+            <button type="button" class="inspector-tab active" id="tab-inspector-task" role="tab" aria-selected="true" aria-controls="inspector-task" data-inspector-target="task">本章任务</button>
+            <button type="button" class="inspector-tab" id="tab-inspector-continuity" role="tab" aria-selected="false" aria-controls="inspector-continuity" data-inspector-target="continuity">连续性</button>
+            <button type="button" class="inspector-tab" id="tab-inspector-memory" role="tab" aria-selected="false" aria-controls="inspector-memory" data-inspector-target="memory">故事记忆</button>
+          </div>
+          <div class="inspector-body panel-side-body">
+            <section class="inspector-panel active" id="inspector-task" role="tabpanel" aria-labelledby="tab-inspector-task">
+              <div class="task-card structured" id="currentTaskCard">未选择任务</div>
+              <div class="beat-plan" id="beatPlanBox">
+                <div class="inspector-section-head">
+                  <h3>本章细纲</h3>
+                  <span id="beatPaceLabel" class="status-count">推进</span>
+                </div>
+                <p class="muted xs" id="beatPlanHint">写前按卷内节奏铺场面。改过的细纲会锁住，直到你点「重出细纲」。</p>
+                <ol id="beatSceneList"></ol>
+                <button type="button" class="btn ghost xs" id="btnRefreshBeat">重出细纲</button>
+              </div>
+              <button type="button" class="btn block legacy-action" id="btnWriteTask" hidden>按任务直接执行</button>
+            </section>
+            <section class="inspector-panel" id="inspector-continuity" role="tabpanel" aria-labelledby="tab-inspector-continuity" hidden>
+              <div class="inspector-section-head"><h3>待处理风险</h3><span id="continuityCount" class="status-count">0</span></div>
+              <div class="continuity-cards" id="continuityInspector">当前没有未处理的连续性风险。</div>
+            </section>
+            <section class="inspector-panel" id="inspector-memory" role="tabpanel" aria-labelledby="tab-inspector-memory" hidden>
+              <div class="context-health" id="contextHealth">
+                <div class="health-heading"><h3>上下文健康</h3><strong id="contextHealthLabel">待评估</strong></div>
+                <div class="health-track"><span id="contextHealthBar"></span></div>
+                <div class="health-grid" id="contextHealthGrid"></div>
+              </div>
+              <div class="inspector-section-head memory-inspector-head">
+                <h3>当前故事记忆</h3>
+                <button type="button" class="btn ghost xs" id="btnMemoryStoryCenter" data-go-mode="control" data-story-target="memoryView">跳到故事中心</button>
+              </div>
+              <div class="memory-summary" id="memoryInspector"></div>
+              <details class="technical-details">
+                <summary>技术详情与 Manifest</summary>
+                <pre class="task-card" id="ctxMeter">—</pre>
+              </details>
+            </section>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- GRAPH -->
+    <section class="view" id="view-graph">
+      <nav class="story-subnav" aria-label="故事工作区">
+        <span class="story-subnav-label">故事中心</span>
+        <button type="button" class="story-submode" data-go-mode="pipeline">策划</button>
+        <button type="button" class="story-submode" data-go-mode="control">主线与任务</button>
+        <button type="button" class="story-submode active" data-go-mode="graph" aria-current="page">人物关系</button>
+      </nav>
+      <div class="graph-layout">
+        <div>
+          <h2 class="view-title">人物关系图谱</h2>
+          <p class="lede">写章交接和分析都会把人物推进这张星图。点一个名字，看他和谁纠葛、关系如何演变。</p>
+          <div class="an-filters row">
+            <label>最少出现 <input type="number" id="graphMinOcc" class="input mono xs" value="1" min="1" max="20" style="width:4rem" /></label>
+            <label>起始章序 <input type="number" id="graphChapFrom" class="input mono xs" min="1" placeholder="可选" style="width:7rem" /></label>
+            <label>结束章序 <input type="number" id="graphChapTo" class="input mono xs" min="1" placeholder="可选" style="width:7rem" /></label>
+            <button type="button" class="btn ghost xs" id="btnGraphApplyFilter">应用筛选</button>
+            <button type="button" class="btn ghost xs" id="btnGraphReload">重载</button>
+            <button type="button" class="btn ghost xs" id="btnGraphClearSelection" hidden>查看全部人物</button>
+            <span id="graphStats" class="muted"></span>
+          </div>
+          <div class="graph-stage">
+            <div id="graphCanvas" class="graph-constellation" aria-label="人物关系星图"></div>
+          </div>
+          <div class="row2">
+            <div>
+              <details class="technical-details">
+                <summary>高级视图：Mermaid 源码</summary>
+                <pre class="mermaid-box" id="mermaidBox">graph LR</pre>
+              </details>
+            </div>
+            <div>
+              <h3 class="subhead">关系表</h3>
+              <div class="task-table-wrap" style="max-height:280px">
+                <table class="task-table" id="edgeTable">
+                  <thead><tr><th>From</th><th>关系</th><th>To</th><th>章节</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="row2" style="margin-top:1rem">
+            <div>
+              <h3 class="subhead">人物档案</h3>
+              <div id="graphProfile" class="an-profile log-scroll"><p class="muted">点击人物列表查看档案</p></div>
+            </div>
+            <div>
+              <h3 class="subhead">关系演化</h3>
+              <div id="graphTimeline" class="an-timeline log-scroll"><p class="muted">分析后显示时间线</p></div>
+            </div>
+          </div>
+          <h3 class="subhead">图谱 JSON（高级编辑）</h3>
+          <textarea id="graphJson" class="input area mono" rows="10"></textarea>
+          <div class="pipe-actions">
+            <button type="button" class="btn primary" id="btnSaveGraph">保存图谱</button>
+            <button type="button" class="btn" id="btnReloadGraph">从项目重载</button>
+          </div>
+        </div>
+        <aside class="pipe-side collapsible-panel" data-panel="graphSide" data-panel-title="人物">
+          <div class="panel-side-head"><h2 class="panel-side-title">人物</h2></div>
+          <div class="panel-side-body">
+            <h3>人物列表</h3>
+            <div id="nodeList" class="log-scroll"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ANALYZE -->
+    <section class="view" id="view-analyze">
+      <div class="an-layout">
+        <div class="an-main">
+          <h2 class="view-title">叙事分析工作台</h2>
+          <p class="lede">把已写章节或整段原文拆开，抽出可复核的人物与关系，写回这本书的「分析/」和共用图谱。中途可暂停，回来接着跑。</p>
+          <div class="pipe-actions">
+            <button type="button" class="btn" id="btnAnLoadChapters">从本书章节载入</button>
+            <button type="button" class="btn" id="btnAnDetect">识别章节</button>
+            <button type="button" class="btn primary" id="btnAnStart">开始分析</button>
+            <button type="button" class="btn" id="btnAnResume">续跑</button>
+            <button type="button" class="btn ghost" id="btnAnPause" disabled>暂停</button>
+            <button type="button" class="btn danger ghost" id="btnAnStop" hidden disabled>停止</button>
+          </div>
+          <div class="an-progress-wrap">
+            <div class="an-progress-track"><div class="an-progress-bar" id="anProgressBar"></div></div>
+            <span id="anProgressLabel" class="muted">等待识别 · 0/0 块</span>
+            <span id="anStatus" class="an-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          </div>
+          <label class="field"><span>分析文本（可粘贴全书；留空则用「从本书章节载入」）</span>
+            <textarea id="anSourceText" class="input area mono" rows="12" placeholder="粘贴小说/剧本，或点击「从本书章节载入」…"></textarea>
+          </label>
+          <section class="analysis-summary" id="anReportSummary" aria-label="分析摘要">
+            <div><span>运行状态</span><strong id="anSummaryStatus">尚未分析</strong></div>
+            <div><span>完成分块</span><strong id="anSummaryChunks">0 / 0</strong></div>
+            <div><span>识别人物</span><strong id="anSummaryCharacters">0</strong></div>
+            <div><span>关系证据</span><strong id="anSummaryRelations">0</strong></div>
+          </section>
+          <div class="analysis-results-head">
+            <div><span class="eyebrow">Review</span><h3 class="subhead">关系、档案与时间线</h3></div>
+            <div class="an-filters row">
+              <label>最少出现 <input type="number" id="anMinOcc" class="input mono xs" value="1" min="1" max="20" /></label>
+              <label>章从 <input type="text" id="anChapFrom" class="input mono xs" placeholder="可选" /></label>
+              <label>章至 <input type="text" id="anChapTo" class="input mono xs" placeholder="可选" /></label>
+              <button type="button" class="btn ghost xs" id="btnAnApplyFilter">应用筛选</button>
+              <button type="button" class="btn ghost xs" id="btnAnSyncGraph">从项目重载</button>
+              <button type="button" class="btn ghost xs" id="btnAnClearSelection" hidden>查看全部人物</button>
+              <span id="anGraphStats" class="muted" aria-live="polite"></span>
+            </div>
+          </div>
+          <div class="graph-stage">
+            <div id="anGraphCanvas" class="graph-constellation" aria-label="分析关系星图"></div>
+          </div>
+          <div class="row2 analysis-results-grid">
+            <div>
+              <details class="technical-details">
+                <summary>高级视图：Mermaid 源码</summary>
+                <pre class="mermaid-box" id="anMermaidBox">graph LR</pre>
+              </details>
+            </div>
+            <div>
+              <h4 class="subhead">关系证据</h4>
+              <div class="task-table-wrap analysis-edge-table">
+                <table class="task-table" id="anEdgeTable">
+                  <thead><tr><th>From</th><th>关系</th><th>To</th><th>章节</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div class="row2 analysis-results-grid">
+            <div><h4 class="subhead">人物档案</h4><div id="anProfile" class="an-profile log-scroll"><p class="muted">从人物列表选择一人查看</p></div></div>
+            <div><h4 class="subhead">关系演化</h4><div id="anTimeline" class="an-timeline log-scroll"><p class="muted">分析后显示时间线</p></div></div>
+          </div>
+          <details class="technical-details analysis-raw-view">
+            <summary>高级视图：报告 Markdown 与图谱 JSON</summary>
+            <label class="field"><span>报告 Markdown</span><textarea id="anReport" class="input area mono" rows="10" readonly placeholder="分析完成后生成报告"></textarea></label>
+            <label class="field"><span>图谱 JSON</span><textarea id="anGraphJson" class="input area mono" rows="10" readonly placeholder="分析完成后生成结构化图谱"></textarea></label>
+          </details>
+        </div>
+        <aside class="pipe-side an-side collapsible-panel" data-panel="analyzeSide" data-panel-title="切章">
+          <div class="panel-side-head"><h2 class="panel-side-title">切章</h2></div>
+          <div class="panel-side-body">
+            <h3>章节识别</h3>
+            <ul id="anChapterList" class="an-ch-list log-scroll"></ul>
+            <h3>人物列表</h3>
+            <div id="anNodeList" class="log-scroll"><p class="muted">分析后选择人物</p></div>
+            <p class="muted xs">参考 ai-novel-screenplay-analyzer：切章 → 分块 → 抽取 → 合并可复核底稿</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+      </div><!-- /.shell-main -->
+    </div><!-- /.shell -->
+  </div><!-- /.app -->
+
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
+      <header class="modal-head">
+        <div><span class="eyebrow">Inkwell 偏好</span><h2 id="settingsTitle">设置</h2></div>
+        <button type="button" class="btn icon" id="btnCloseSettings" aria-label="关闭设置" title="关闭"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+      </header>
+      <div class="settings-layout">
+        <nav class="settings-nav" role="tablist" aria-label="设置分类">
+          <button type="button" class="settings-nav-item active" id="settings-tab-appearance" data-settings-target="appearance" role="tab" aria-selected="true" aria-controls="settings-panel-appearance" tabindex="0">外观</button>
+          <button type="button" class="settings-nav-item" id="settings-tab-model" data-settings-target="model" role="tab" aria-selected="false" aria-controls="settings-panel-model" tabindex="-1">模型连接</button>
+          <button type="button" class="settings-nav-item" id="settings-tab-writing" data-settings-target="writing" role="tab" aria-selected="false" aria-controls="settings-panel-writing" tabindex="-1">写作</button>
+          <button type="button" class="settings-nav-item" id="settings-tab-continuity" data-settings-target="continuity" role="tab" aria-selected="false" aria-controls="settings-panel-continuity" tabindex="-1">连续性</button>
+          <button type="button" class="settings-nav-item" id="settings-tab-retrieval" data-settings-target="retrieval" role="tab" aria-selected="false" aria-controls="settings-panel-retrieval" tabindex="-1">检索</button>
+          <button type="button" class="settings-nav-item" id="settings-tab-advanced" data-settings-target="advanced" role="tab" aria-selected="false" aria-controls="settings-panel-advanced" tabindex="-1">高级</button>
+        </nav>
+        <div class="modal-body settings-body">
+          <section class="settings-section active" id="settings-panel-appearance" data-settings-panel="appearance" role="tabpanel" aria-labelledby="settings-tab-appearance">
+            <span class="eyebrow">Appearance</span>
+            <h3 class="settings-section-title">外观与书库</h3>
+            <p class="settings-description">选择适合长时间写作的界面气质。主题立即生效，只保存在本地。</p>
+            <div class="theme-swatches" id="themeSwatches" role="listbox" aria-label="主题">
+              <button type="button" class="theme-swatch" data-theme="soft-paper" role="option" aria-selected="true" tabindex="0" title="柔纸"><span class="theme-dot soft-paper"></span><strong>柔纸</strong><small>温暖纸面</small></button>
+              <button type="button" class="theme-swatch" data-theme="ink-night" role="option" aria-selected="false" tabindex="-1" title="墨夜"><span class="theme-dot ink-night"></span><strong>墨夜</strong><small>低光专注</small></button>
+              <button type="button" class="theme-swatch" data-theme="qing-jian" role="option" aria-selected="false" tabindex="-1" title="青简"><span class="theme-dot qing-jian"></span><strong>青简</strong><small>冷静清晰</small></button>
+            </div>
+            <div class="settings-subsection">
+              <h4>本地书库</h4>
+              <label class="field"><span>书库路径</span><input id="cfgVaultPath" class="input mono" readonly placeholder="未连接" /></label>
+              <div class="settings-vault-actions">
+                <button type="button" class="btn ghost" id="btnSettingsOpenVault">打开库</button>
+                <button type="button" class="btn ghost" id="btnSettingsNewVault">新建库</button>
+                <button type="button" class="btn ghost" id="btnSettingsCopyVaultPath">复制路径</button>
+              </div>
+              <div class="settings-meta" id="cfgEngineMeta"><span>引擎 / 版本：—</span></div>
+            </div>
+          </section>
+
+          <section class="settings-section" id="settings-panel-model" data-settings-panel="model" role="tabpanel" aria-labelledby="settings-tab-model" hidden>
+            <span class="eyebrow">Model</span>
+            <h3 class="settings-section-title">模型连接</h3>
+            <p class="settings-description">连接 OpenAI-compatible 服务。正式 Windows 客户端使用当前用户的 DPAPI 加密密钥，配置 JSON 与浏览器缓存不保存明文。</p>
+            <label class="field"><span>API Key</span><input id="cfgKey" class="input mono" type="password" autocomplete="off" spellcheck="false" /></label>
+            <label class="field"><span>模型</span><input id="cfgModel" class="input mono" /></label>
+            <button type="button" class="btn primary" id="btnTestApi">测试连接</button>
+            <pre class="test-log" id="testLog"></pre>
+          </section>
+
+          <section class="settings-section" id="settings-panel-writing" data-settings-panel="writing" role="tabpanel" aria-labelledby="settings-tab-writing" hidden>
+            <span class="eyebrow">Writing</span>
+            <h3 class="settings-section-title">写作行为</h3>
+            <p class="settings-description">控制章节目标和生成完成后的自动动作。</p>
+            <label class="field"><span>每章目标字数</span><input id="cfgChapWords" class="input mono" type="number" /></label>
+            <label class="field"><span>上章文末衔接字数</span><input id="cfgPrevTail" class="input mono" type="number" title="写新章时附带上一章文末，保证连贯" /></label>
+            <label class="field"><span>滚动摘要条数</span><input id="cfgMemDepth" class="input mono" type="number" /></label>
+            <label class="field setting-toggle"><span><strong>Harness 写章流水线</strong><small>使用检索、写作、交接和重建索引的完整闭环。</small></span><input id="cfgHarness" type="checkbox" checked /></label>
+            <label class="field setting-toggle"><span><strong>生成后自动交接</strong><small>正文完成后自动更新摘要、人物关系和故事记忆。</small></span><input id="cfgManualHandoff" type="checkbox" checked /></label>
+          </section>
+
+          <section class="settings-section" id="settings-panel-continuity" data-settings-panel="continuity" role="tabpanel" aria-labelledby="settings-tab-continuity" hidden>
+            <span class="eyebrow">Continuity</span>
+            <h3 class="settings-section-title">连续性保护</h3>
+            <p class="settings-description">决定 Inkwell 如何审查新正文，以及何时阻止缺少记忆的裸写。</p>
+            <label class="field setting-toggle"><span><strong>章后连续性审查</strong><small>检查 Canon、时间线、人物状态、伏笔和任务完成度。</small></span><input id="cfgContinuityReview" type="checkbox" checked /></label>
+            <label class="field setting-toggle"><span><strong>允许精确局部修订</strong><small>只修复唯一命中的问题片段，并保留原文快照。</small></span><input id="cfgContinuityRepair" type="checkbox" checked /></label>
+            <label class="field setting-toggle"><span><strong>写前本章细纲</strong><small>先规划 2–5 个场面再写，避免连章空转和撞开场。</small></span><input id="cfgChapterBeat" type="checkbox" checked /></label>
+            <label class="field setting-toggle"><span><strong>写后套话检查</strong><small>开场重复、禁词和套话记入连续性风险。</small></span><input id="cfgProseLint" type="checkbox" checked /></label>
+            <label class="field setting-toggle danger-setting"><span><strong>严格审查</strong><small>存在 blocker 时停止交接，等待作者处理。</small></span><input id="cfgContinuityStrict" type="checkbox" /></label>
+          </section>
+
+          <section class="settings-section" id="settings-panel-retrieval" data-settings-panel="retrieval" role="tabpanel" aria-labelledby="settings-tab-retrieval" hidden>
+            <span class="eyebrow">Retrieval</span>
+            <h3 class="settings-section-title">故事记忆检索</h3>
+            <p class="settings-description">控制前文、Canon、人物、伏笔和时间线如何进入本轮写作。</p>
+            <label class="field setting-toggle"><span><strong>启用本地混合检索</strong><small>优先使用本地索引，失败时显示降级原因。</small></span><input id="cfgRag" type="checkbox" checked /></label>
+            <label class="field setting-toggle danger-setting"><span><strong>严格检索</strong><small>已有历史正文但检索失败时停止生成，避免无记忆写作。</small></span><input id="cfgRagStrict" type="checkbox" /></label>
+            <button type="button" class="btn ghost" id="btnRebuildRag">重建故事记忆索引</button>
+          </section>
+
+          <section class="settings-section" id="settings-panel-advanced" data-settings-panel="advanced" role="tabpanel" aria-labelledby="settings-tab-advanced" hidden>
+            <span class="eyebrow">Advanced</span>
+            <h3 class="settings-section-title">上下文与检索参数</h3>
+            <p class="settings-description">仅在调试模型上下文或反代 embeddings 时调整。</p>
+            <label class="field"><span>Base URL</span><input id="cfgBase" class="input mono" /></label>
+            <label class="field"><span>上下文预算（字符）</span><input id="cfgBudget" class="input mono" type="number" /></label>
+            <label class="field"><span>上下文预算（估算 tokens）</span><input id="cfgTokenBudget" class="input mono" type="number" /></label>
+            <label class="field"><span>输出预算（tokens）</span><input id="cfgOutputTokens" class="input mono" type="number" min="512" max="65536" step="256" title="章节正文的最大输出 token 数；遇到截断时可适当提高" /></label>
+            <label class="field setting-toggle"><span><strong>向量重排</strong><small>需要反代提供 embeddings 接口。</small></span><input id="cfgRagEmbed" type="checkbox" /></label>
+            <label class="field"><span>RAG Top-K</span><input id="cfgRagTopK" class="input mono" type="number" /></label>
+            <p class="hint muted">完整链路：Retrieve → Write → Review → Handoff → Reindex。预算建议不低于 14,000 字符。</p>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="taskModal" hidden>
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle" tabindex="-1">
+      <header class="modal-head">
+        <h2 id="taskModalTitle">编辑任务</h2>
+        <button type="button" class="btn icon" id="btnCloseTask" aria-label="关闭任务编辑" title="关闭"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+      </header>
+      <div class="modal-body">
+        <label class="field"><span>标题</span><input id="tmTitle" class="input" /></label>
+        <label class="field"><span>目标</span><textarea id="tmGoal" class="input area" rows="2"></textarea></label>
+        <label class="field"><span>冲突</span><textarea id="tmConflict" class="input area" rows="2"></textarea></label>
+        <label class="field"><span>节拍（每行一条）</span><textarea id="tmBeats" class="input area" rows="3"></textarea></label>
+        <label class="field"><span>必须包含（每行）</span><textarea id="tmMust" class="input area" rows="2"></textarea></label>
+        <label class="field"><span>禁止（每行）</span><textarea id="tmMustNot" class="input area" rows="2"></textarea></label>
+        <label class="field"><span>章末钩子</span><input id="tmHook" class="input" /></label>
+        <label class="field"><span>视角</span><input id="tmPov" class="input" /></label>
+        <button type="button" class="btn primary block" id="btnSaveTask">保存任务</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="snapshotModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="snapshotTitle" tabindex="-1">
+      <header class="modal-head">
+        <h2 id="snapshotTitle">快照列表</h2>
+        <button type="button" class="btn icon" id="btnCloseSnapshots" aria-label="关闭快照列表" title="关闭"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+      </header>
+      <div class="modal-body">
+        <p class="lede" id="snapshotModalHint">选择要恢复的快照。恢复会覆盖当前书稿文件。</p>
+        <ul class="snapshot-list" id="snapshotList"></ul>
+        <p class="snapshot-empty" id="snapshotEmpty" hidden>暂无快照，请先点创建快照</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="saveConflictModal" hidden>
+    <div class="modal conflict-modal" role="dialog" aria-modal="true" aria-labelledby="saveConflictTitle" aria-describedby="saveConflictHint" tabindex="-1">
+      <header class="modal-head">
+        <div>
+          <span class="eyebrow">磁盘版本保护</span>
+          <h2 id="saveConflictTitle">发现同一章节的外部修改</h2>
+        </div>
+        <button type="button" class="btn icon" id="btnCloseSaveConflict" aria-label="暂不处理保存冲突" title="暂不处理"><span class="ui-icon icon-close" aria-hidden="true"></span></button>
+      </header>
+      <div class="modal-body conflict-body">
+        <p class="conflict-hint" id="saveConflictHint">Inkwell 已保留磁盘上的较新版本，没有覆盖任何正文。请比较两个版本后决定。</p>
+        <div class="conflict-meta">
+          <strong id="saveConflictChapter">未命名章节</strong>
+          <span id="saveConflictPath" class="mono"></span>
+          <span id="saveConflictQueue" class="status-pill"></span>
+        </div>
+        <div class="conflict-compare" aria-label="章节版本比较">
+          <section class="conflict-version">
+            <header><span>Inkwell 内存稿</span><small>尚未覆盖磁盘</small></header>
+            <pre id="saveConflictLocal" tabindex="0"></pre>
+          </section>
+          <section class="conflict-version disk-version">
+            <header><span>磁盘新版</span><small>当前权威版本</small></header>
+            <pre id="saveConflictDisk" tabindex="0"></pre>
+          </section>
+        </div>
+        <label class="field conflict-merge-field">
+          <span>手工合并稿</span>
+          <textarea id="saveConflictMerge" class="input area manuscript-font" rows="10" spellcheck="false"></textarea>
+          <small>默认放入内存稿；可参考上方磁盘新版调整，再保存合并结果。</small>
+        </label>
+      </div>
+      <div class="conflict-actions">
+        <button type="button" class="btn primary" id="btnConflictUseDisk">使用磁盘新版</button>
+        <button type="button" class="btn ghost" id="btnConflictSaveMerge">保存合并稿</button>
+        <button type="button" class="btn danger" id="btnConflictKeepLocal">用我的版本覆盖磁盘</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="chapter-format.js"></script>
+  <script src="prompts.js"></script>
+  <script src="craft.js"></script>
+  <script src="context.js"></script>
+  <script src="rag.js"></script>
+  <script src="store.js"></script>
+  <script src="ui-shell.js"></script>
+  <script src="text-metrics.js"></script>
+  <script src="vault.js"></script>
+  <script src="library.js"></script>
+  <script src="workspace.js"></script>
+  <script src="api.js"></script>
+  <script src="pipeline.js"></script>
+  <script src="harness.js"></script>
+  <script src="chapter-split.js"></script>
+  <script src="narrative-model.js"></script>
+  <script src="graph-view.js"></script>
+  <script src="graph-panel.js"></script>
+  <script src="story-records.js"></script>
+  <script src="composer-review.js"></script>
+  <script src="write-ui.js"></script>
+  <script src="analysis-runner.js"></script>
+  <script src="analyze-ui.js"></script>
+  <script src="vault-ui.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

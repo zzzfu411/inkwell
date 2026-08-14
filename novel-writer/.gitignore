@@ -1,0 +1,26 @@
+# 本地书库（正文/策划，默认不进 git；需要版本管理可自行去掉）
+vault/books/
+vault/library.json
+mogao-settings.json
+vault/.desktop.lock
+vault/**/*.tmp
+**/__pycache__/
+*.pyc
+
+# 打包产物
+build/
+dist/
+release/
+.venv-build/
+*.spec.bak
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+.env
+*.log

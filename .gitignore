@@ -1,0 +1,44 @@
+# Dependencies and build
+node_modules/
+**/target/
+dist/
+build/
+*.local
+
+# Python
+**/__pycache__/
+*.pyc
+.venv/
+.venv-build/
+
+# User state and secrets
+**/.env
+**/mogao-settings.json
+**/api-key.dpapi
+**/api-key.dpapi.bak
+**/api-key.dpapi.tmp
+**/vault/books/
+**/vault/library.json
+**/vault/.mogao-config.json
+**/vault/.desktop.lock
+
+# Release binaries (source keeps release/ui)
+**/*.exe
+**/release/manifest.json
+**/release/*.sha256
+
+# Test / editor noise
+/output/
+**/.playwright-cli/
+**/.visual-vault/
+**/playwright-report/
+**/test-results/
+logs/
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+*.suo
+*.swp

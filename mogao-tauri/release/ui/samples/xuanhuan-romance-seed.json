@@ -1,0 +1,657 @@
+{
+  "id": "seed_honglian_yue",
+  "title": "红莲渡鹤归",
+  "createdAt": 0,
+  "updatedAt": 0,
+  "stage": "ready",
+  "ideaInput": "玄幻+言情双强。女主有秘密，男主从对立到共谋。先抑后扬，权谋与感情并进，禁止无脑升级和无代价HE。",
+  "authorNote": "对标气质：双强、慢热互救、身份差、共同秘密。感情线必须推动主线，不能只谈恋爱。",
+  "authorCastNote": "女主视角为主，男主戏份对等；反派要有制度性压迫，不只是个人坏。",
+  "authorSpineLock": "女主为救族人潜入敌营，与「死敌少主」因共同秘密结成脆弱同盟；感情升温的同时必须共同掀翻旧秩序。最终不是女主被拯救，而是两人互相成为对方破局的钥匙。",
+  "authorForbidden": "禁止女主无脑白莲；禁止男主无代价洗白家族罪恶；禁止后宫；禁止靠突然多出一个神器无铺垫解决终局。",
+  "targetChapters": 24,
+  "title_candidates": [
+    "红莲渡鹤归",
+    "鹤归时，莲正燃",
+    "敌营种莲花",
+    "共命不共天",
+    "白骨台上的婚书"
+  ],
+  "pitch": "她潜入死敌宗门当药奴，却与少主共享一桩能灭两族的秘密——不联手，都得死。",
+  "genre": "玄幻",
+  "sub_genre": "双强言情 / 敌营潜伏 / 权谋",
+  "hooks": [
+    "身份反差：药奴实为复仇者，少主实为改革派囚徒",
+    "共命契约：一人死则秘密自动公之于众",
+    "假成亲真破局：宗门大比用婚约当筹码",
+    "互救节点：各救对方一次，感情不靠嘴炮"
+  ],
+  "tone": "克制、锋利、慢热、对白有刺、场景有画面",
+  "audience": "喜欢双强、权谋、互救、HE但过程虐心的女频/中性向读者",
+  "risks": [
+    "感情线写成纯甜会稀释权谋",
+    "男主家族作恶过重导致洗白困难——必须让他承担代价",
+    "女主潜入线若暴露过早，后文失去张力"
+  ],
+  "world": {
+    "era": "九州乱世，三宗两盟并立，灵气潮汐每甲子一变",
+    "power_system": "灵脉铸骨→开府→凝丹→化神。另有「共命契」邪术：以心头血为引，双方生死相系，契印可见于手腕内侧。",
+    "factions": [
+      {
+        "id": "f_chiyun",
+        "name": "赤云宗",
+        "goal": "垄断南境灵矿，维持血祭旧法提升战力",
+        "stance": "男主所属；表面光鲜，暗行血祭"
+      },
+      {
+        "id": "f_baihe",
+        "name": "白鹤谷",
+        "goal": "守护「鹤鸣 orthodoxy」医道传承，寻回被夺的谷主遗骨",
+        "stance": "女主故族；已被赤云几乎灭门"
+      },
+      {
+        "id": "f_heishi",
+        "name": "黑市十二坊",
+        "goal": "情报与禁药买卖，谁给钱帮谁",
+        "stance": "中立 opportunist，可买可卖"
+      },
+      {
+        "id": "f_tianmeng",
+        "name": "天衡盟",
+        "goal": "名义上仲裁宗门争端，实际吃两家回扣",
+        "stance": "伪中立，后期可成为共同敌人"
+      }
+    ],
+    "locations": [
+      { "id": "l_chiyunshan", "name": "赤云山门", "note": "男主主场，戒备森严" },
+      { "id": "l_yaogu", "name": "药谷冷牢", "note": "女主潜伏起点，刑讯与炼药并存" },
+      { "id": "l_baiheji", "name": "白鹤旧墟", "note": "女主记忆与伏笔之地" },
+      { "id": "l_heishi", "name": "夜泊黑市", "note": "情报交易、假身份中转" }
+    ],
+    "rules": [
+      "共命契一旦缔结，强行解除需等量心头血+化神期见证，否则双死",
+      "血祭可短期暴涨战力，但会污染灵脉，被发现即成众矢之的",
+      "宗门大比胜者可指定一桩「不可拒的婚约或死罪豁免」"
+    ],
+    "taboos": [
+      "宗门内禁止私下缔结共命契",
+      "白鹤谷医术不得用于血祭"
+    ],
+    "secrets": [
+      "赤云宗血祭原料来自白鹤谷遗民",
+      "男主生母死于血祭反噬，他一直在收集罪证",
+      "女主体内有「鹤心残印」，可反制血祭阵眼"
+    ]
+  },
+  "graph": {
+    "nodes": [
+      {
+        "id": "n_linqing",
+        "label": "林清",
+        "aliases": ["药奴阿清", "白鹤谷少主"],
+        "type": "character",
+        "sect": "白鹤谷",
+        "role": "protagonist",
+        "arc": "从复仇孤狼到愿与人共担命运",
+        "voice": "话少、刀一样准，偶尔冷幽默",
+        "want": "灭赤云、找回族人遗骨",
+        "need": "学会信任与被拯救",
+        "note": "女，约19，左腕有旧疤，擅医毒"
+      },
+      {
+        "id": "n_xieyan",
+        "label": "谢宴",
+        "aliases": ["赤云少主", "宴公子"],
+        "type": "character",
+        "sect": "赤云宗",
+        "role": "heroine",
+        "arc": "从宗门继承人到亲手拆掉王座的人",
+        "voice": "表面从容礼貌，句句带刺",
+        "want": "坐稳少主之位、停止血祭",
+        "need": "承认自己需要同盟而非独行",
+        "note": "男，约21，右腕共命印将与女主相连"
+      },
+      {
+        "id": "n_xiejun",
+        "label": "谢君临",
+        "aliases": ["赤云宗主"],
+        "type": "character",
+        "sect": "赤云宗",
+        "role": "antagonist",
+        "arc": "制度性恶的化身，越到后期越「合理」",
+        "voice": "慈父口吻说残忍的话",
+        "want": "用血祭称霸南境",
+        "need": "—",
+        "note": "男主之父，表面慈爱"
+      },
+      {
+        "id": "n_suhe",
+        "label": "苏鹤",
+        "aliases": ["小鹤"],
+        "type": "character",
+        "sect": "白鹤谷遗民",
+        "role": "support",
+        "arc": "从被保护到能独当一面的情报眼",
+        "voice": "直球、怕疼但敢闯",
+        "want": "活下去并找到姐姐林清",
+        "need": "不再只当累赘",
+        "note": "女主名义上的「族妹」，实为重要证人"
+      },
+      {
+        "id": "n_qiumo",
+        "label": "裘陌",
+        "aliases": ["黑市牙人"],
+        "type": "character",
+        "sect": "黑市十二坊",
+        "role": "support",
+        "arc": "唯利是图到押宝改革",
+        "voice": "市井、爱讲价",
+        "want": "赚钱与活命",
+        "need": "选边站时的道义",
+        "note": "可交易情报，不可全信"
+      },
+      {
+        "id": "n_weiluo",
+        "label": "卫洛",
+        "aliases": ["执法长老代行"],
+        "type": "character",
+        "sect": "赤云宗",
+        "role": "antagonist",
+        "arc": "忠于旧法的刀",
+        "voice": "简短、命令式",
+        "want": "清除少主「软弱」",
+        "need": "—",
+        "note": "男主政治对手，推动血祭扩大"
+      },
+      {
+        "id": "n_mingyue",
+        "label": "明玥",
+        "aliases": ["天衡使"],
+        "type": "character",
+        "sect": "天衡盟",
+        "role": "support",
+        "arc": "从和稀泥到被逼亮剑",
+        "voice": "官腔里藏试探",
+        "want": "盟内升迁",
+        "need": "面对真正的公正",
+        "note": "后期可成外部变量"
+      }
+    ],
+    "edges": [
+      {
+        "source": "n_linqing",
+        "target": "n_xieyan",
+        "relationship": "共命/假敌对",
+        "directed": false,
+        "phase": "开局→中段",
+        "note": "核心关系，从利用到真心"
+      },
+      {
+        "source": "n_xiejun",
+        "target": "n_xieyan",
+        "relationship": "父子/控制",
+        "directed": true,
+        "phase": "全程",
+        "note": "制度压迫的家庭版"
+      },
+      {
+        "source": "n_linqing",
+        "target": "n_xiejun",
+        "relationship": "敌对",
+        "directed": false,
+        "phase": "全程",
+        "note": "灭门仇"
+      },
+      {
+        "source": "n_linqing",
+        "target": "n_suhe",
+        "relationship": "亲族/保护",
+        "directed": true,
+        "phase": "开局",
+        "note": "女主软肋"
+      },
+      {
+        "source": "n_xieyan",
+        "target": "n_weiluo",
+        "relationship": "竞争/敌对",
+        "directed": false,
+        "phase": "中段",
+        "note": "宗门路线之争"
+      },
+      {
+        "source": "n_qiumo",
+        "target": "n_linqing",
+        "relationship": "交易",
+        "directed": false,
+        "phase": "开局",
+        "note": "情报中介"
+      },
+      {
+        "source": "n_mingyue",
+        "target": "n_xiejun",
+        "relationship": "合作/互相利用",
+        "directed": false,
+        "phase": "中后",
+        "note": "官方背书血祭的灰色地带"
+      }
+    ],
+    "stats": { "characters": 7, "relationships": 7 }
+  },
+  "cast_summary": "药奴林清（白鹤遗孤）与赤云少主谢宴共命同盟，共抗宗主谢君临与执法卫洛的血祭秩序；苏鹤是软肋，裘陌是刀口舔血的牙人，明玥是伪中立变量。",
+  "spine": {
+    "logline": "女主潜入死敌宗门复仇，却与少主缔结共命契，二人必须在爱情与灭门真相之间选择：联手掀翻血祭，或一起陪葬旧秩序。",
+    "theme": "真正的并肩不是谁拯救谁，而是敢把把柄交到对方手里。",
+    "spine": [
+      {
+        "act": 1,
+        "name": "潜入与共命",
+        "goal": "女主进入赤云，与男主被迫缔契，建立脆弱同盟",
+        "end_state": "二人互相握有对方死穴，假面共存",
+        "forbidden": "禁止过早公开身份；禁止一见钟情无摩擦"
+      },
+      {
+        "act": 2,
+        "name": "互探与互救",
+        "goal": "在宗门大比与血祭扩张中互相试探、各救一次，感情升温",
+        "end_state": "同盟转为情感，但信任仍有裂痕",
+        "forbidden": "禁止男主一次性洗白家族；禁止女主放弃复仇"
+      },
+      {
+        "act": 3,
+        "name": "决裂与共谋",
+        "goal": "真相摊牌，面对宗主与天衡盟，完成破局与HE代价",
+        "end_state": "旧秩序崩，二人活着但失去「干净的胜利」",
+        "forbidden": "禁止神器空降；禁止反派无代价团灭"
+      }
+    ],
+    "volumes": [
+      {
+        "id": "v1",
+        "title": "第一卷 · 药奴入云",
+        "chapters": 12,
+        "focus": "潜伏、共命、初次互救",
+        "climax": "大比婚约局，女主身份几乎暴露"
+      },
+      {
+        "id": "v2",
+        "title": "第二卷 · 鹤心燃莲",
+        "chapters": 12,
+        "focus": "血祭扩张、信任崩塌与重建、终局",
+        "climax": "共毁血祭阵眼，谢君临败亡，二人承担公开秘密的代价"
+      }
+    ],
+    "foreshadow": [
+      { "id": "fs1", "seed": "女主左腕旧疤实为鹤心残印", "payoff_around": "约第16–18章" },
+      { "id": "fs2", "seed": "男主收集的「药引账册」缺最后一页", "payoff_around": "约第14章" },
+      { "id": "fs3", "seed": "苏鹤见过血祭现场但失忆", "payoff_around": "约第10–12章" },
+      { "id": "fs4", "seed": "共命契反噬会暴露心境", "payoff_around": "感情关键节点反复使用" }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "t001",
+      "volume_id": "v1",
+      "order": 1,
+      "chapter_title": "第1章 药奴名册",
+      "goal": "林清以药奴身份进入赤云药谷，建立观察视角",
+      "conflict": "冷牢规矩残酷，卫洛抽查",
+      "beats": ["夜入药谷", "目睹血祭残余气味", "与谢宴远远对上视线（不识）"],
+      "must_include": ["药奴身份", "赤云压迫感", "林清不哭不求"],
+      "must_not": ["表白", "暴露白鹤身份", "超强开挂"],
+      "hook_end": "名册末页有她本不该出现的本名残笔",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t002",
+      "volume_id": "v1",
+      "order": 2,
+      "chapter_title": "第2章 少主的影子",
+      "goal": "谢宴出场：表面巡谷，实则查血祭账",
+      "conflict": "谢君临派人「陪同」监视",
+      "beats": ["巡谷", "发现异常药耗", "故意忽略林清却记下她"],
+      "must_include": ["男主伪面", "父子监控", "血祭线索"],
+      "must_not": ["男主直接反叛成功", "对女主温柔过度"],
+      "hook_end": "他在账册里圈下「鹤」字残痕",
+      "pov": "谢宴",
+      "status": "pending"
+    },
+    {
+      "id": "t003",
+      "volume_id": "v1",
+      "order": 3,
+      "chapter_title": "第3章 共命局",
+      "goal": "两人因追杀与灭口被迫缔结共命契",
+      "conflict": "杀手要灭口知情者，退路封死",
+      "beats": ["林清发现不该看的东西", "追杀", "谢宴出现", "血契"],
+      "must_include": ["共命契规则", "互不信任的谈判", "腕印"],
+      "must_not": ["浪漫告白", "一方无条件服从"],
+      "hook_end": "契成瞬间，两人「看见」对方一段不愿示人的记忆碎片",
+      "pov": "双视角可，偏林清",
+      "status": "pending"
+    },
+    {
+      "id": "t004",
+      "volume_id": "v1",
+      "order": 4,
+      "chapter_title": "第4章 假面同盟",
+      "goal": "约定规则：交换情报、互不卖对方、目标暂时一致",
+      "conflict": "卫洛怀疑少主私通药奴",
+      "beats": ["定规矩", "第一次情报交换", "卫洛试探"],
+      "must_include": ["同盟条款", "互相拿捏", "苏鹤线埋伏"],
+      "must_not": ["立刻爱上", "告诉对方全部身世"],
+      "hook_end": "苏鹤在黑市露面的消息传到林清耳中",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t005",
+      "volume_id": "v1",
+      "order": 5,
+      "chapter_title": "第5章 夜泊牙人",
+      "goal": "接触裘陌，确认苏鹤线索，男主暗中接应",
+      "conflict": "黑市要价与出卖风险",
+      "beats": ["离山", "议价", "半真半假情报", "遇伏"],
+      "must_include": ["裘陌人物立住", "男女主配合尚生涩"],
+      "must_not": ["轻松救下苏鹤", "黑市全灭"],
+      "hook_end": "情报指向：苏鹤被「请」去观摩一次「大典」",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t006",
+      "volume_id": "v1",
+      "order": 6,
+      "chapter_title": "第6章 血色大典",
+      "goal": "女主目击血祭边缘，男主必须公开站队表演",
+      "conflict": "女主恨意爆发 vs 不能暴露",
+      "beats": ["大典", "林清几乎失控", "谢宴用共命痛感强行把她拽回"],
+      "must_include": ["血祭残酷", "男主的痛苦与伪装", "共命反噬"],
+      "must_not": ["当场刺杀宗主", "女主身份公开"],
+      "hook_end": "祭坛下有白鹤谷旧徽",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t007",
+      "volume_id": "v1",
+      "order": 7,
+      "chapter_title": "第7章 第一次救他",
+      "goal": "卫洛设局害谢宴，林清以医毒手段救下（互救节点1）",
+      "conflict": "救他等于推迟复仇",
+      "beats": ["毒局", "林清选择", "谢宴醒来的沉默"],
+      "must_include": ["女主主动救", "不告白", "代价（她暴露部分医术）"],
+      "must_not": ["肉麻报答戏", "卫洛被立刻除掉"],
+      "hook_end": "谢宴把半本账册塞给她：你要的真相，自己看",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t008",
+      "volume_id": "v1",
+      "order": 8,
+      "chapter_title": "第8章 账册与恨",
+      "goal": "林清读到族人被作药引，信任几乎崩盘",
+      "conflict": "她想杀谢宴，共命却不允许轻易死",
+      "beats": ["读账", "对质", "谢宴承认「知道却还不够能停」"],
+      "must_include": ["女主怒", "男主不辩解只承担", "同盟濒临破裂"],
+      "must_not": ["男主哭求原谅成功", "女主瞬间释怀"],
+      "hook_end": "宗门大比临近，婚约权成公开筹码",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t009",
+      "volume_id": "v1",
+      "order": 9,
+      "chapter_title": "第9章 大比开锣",
+      "goal": "两人各怀目的参赛/操控赛果",
+      "conflict": "谢君临要求谢宴当众指定婚约对象以稳权力",
+      "beats": ["大比规则", "各方押注", "林清被推上角斗台"],
+      "must_include": ["权谋公开化", "药奴也可成棋子"],
+      "must_not": ["无脑碾压全场"],
+      "hook_end": "卫洛暗示：那个药奴，很像白鹤谷的人",
+      "pov": "谢宴",
+      "status": "pending"
+    },
+    {
+      "id": "t010",
+      "volume_id": "v1",
+      "order": 10,
+      "chapter_title": "第10章 台上假死",
+      "goal": "林清险胜/险败，身份裂缝加大；苏鹤出现在观礼席",
+      "conflict": "救苏鹤 vs 保潜伏",
+      "beats": ["苦战", "苏鹤呼救", "林清微表情被谢宴接住"],
+      "must_include": ["苏鹤线激活", "男女主无声配合"],
+      "must_not": ["当场相认全家"],
+      "hook_end": "谢宴当众请婚：我要这个药奴",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t011",
+      "volume_id": "v1",
+      "order": 11,
+      "chapter_title": "第11章 婚书与枷锁",
+      "goal": "假婚约成立，二人获得行动空间也锁死在聚光灯下",
+      "conflict": "宗门盯梢升级，女主恨意与策略拉扯",
+      "beats": ["婚书", "同居监视", "夜里冷静分工"],
+      "must_include": ["契约婚姻的尴尬与锋利", "下一步破局目标"],
+      "must_not": ["强行亲密戏压过权谋"],
+      "hook_end": "夜半，共命印因心境共鸣发烫——有人在血祭阵眼加注",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t012",
+      "volume_id": "v1",
+      "order": 12,
+      "chapter_title": "第12章 鹤影将露",
+      "goal": "卷一高潮：救苏鹤行动，女主鹤心残印初显，身份几乎暴露",
+      "conflict": "卫洛带人围堵，谢宴第一次公开挡在她前面（互救节点2）",
+      "beats": ["劫人", "围堵", "残印亮", "谢宴挡刀/挡令"],
+      "must_include": ["男主救女主", "代价（谢宴位分受损）", "卷一钩子交给卷二"],
+      "must_not": ["灭掉宗主", "完美逃脱无伤痕"],
+      "hook_end": "谢君临笑着说：宴儿，把她的心剖开给我看看是不是鹤",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t013",
+      "volume_id": "v2",
+      "order": 13,
+      "chapter_title": "第13章 逃与追",
+      "goal": "二人带苏鹤暂离核心区，关系从利用转向「必须对上话」",
+      "conflict": "追杀 + 伤势 + 信任裂痕",
+      "beats": ["逃", "疗伤", "第一次认真讲条件"],
+      "must_include": ["平等谈判", "苏鹤视角看两人"],
+      "must_not": ["旅途无事甜宠"],
+      "hook_end": "天衡盟明玥发来「调解」邀请——鸿门宴",
+      "pov": "苏鹤可穿插",
+      "status": "pending"
+    },
+    {
+      "id": "t014",
+      "volume_id": "v2",
+      "order": 14,
+      "chapter_title": "第14章 账册末页",
+      "goal": "补全药引账册，锁定血祭核心罪证",
+      "conflict": "罪证指向谢宴无法回避的血缘责任",
+      "beats": ["取证", "对读", "男主崩溃边缘的冷静"],
+      "must_include": ["男主承担", "女主不轻易原谅但仍合作"],
+      "must_not": ["罪证被烧掉且无法恢复"],
+      "hook_end": "罪证副本已流向天衡盟——被人篡改",
+      "pov": "谢宴",
+      "status": "pending"
+    },
+    {
+      "id": "t015",
+      "volume_id": "v2",
+      "order": 15,
+      "chapter_title": "第15章 鸿门盟",
+      "goal": "明玥场上施压，二人必须演一出「决裂」或「联姻」戏",
+      "conflict": "外部仲裁实为收编",
+      "beats": ["赴宴", "交易条件", "反将一军"],
+      "must_include": ["权谋来回", "假戏真心意的裂缝"],
+      "must_not": ["一拳打爆天衡盟"],
+      "hook_end": "明玥私下说：血祭的下一波目标，是整座南境灵脉",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t016",
+      "volume_id": "v2",
+      "order": 16,
+      "chapter_title": "第16章 鹤心",
+      "goal": "揭示林清鹤心残印可破血祭，同时成为人人想夺的药引",
+      "conflict": "她从猎人变成猎物",
+      "beats": ["残印详解", "被追杀升级", "谢宴护与争"],
+      "must_include": ["设定回收 fs1", "女主主体性：不甘只当钥匙"],
+      "must_not": ["女主被俘失能整章"],
+      "hook_end": "谢君临布下「以宴为祭」的备选",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t017",
+      "volume_id": "v2",
+      "order": 17,
+      "chapter_title": "第17章 以子为祭",
+      "goal": "男主发现自己可能被父亲当祭品，父子彻底撕裂",
+      "conflict": "家与义",
+      "beats": ["发现", "对质失败", "男主彻底选边"],
+      "must_include": ["谢君临的「爱」是控制", "男主成长"],
+      "must_not": ["父子感动和解"],
+      "hook_end": "卫洛拿到对林清的「猎杀令」",
+      "pov": "谢宴",
+      "status": "pending"
+    },
+    {
+      "id": "t018",
+      "volume_id": "v2",
+      "order": 18,
+      "chapter_title": "第18章 真心难用",
+      "goal": "感情坦白但仍把破局放在第一（关键感情戏，服务主线）",
+      "conflict": "爱意与复仇 indirection",
+      "beats": ["共命心境共鸣", "有一句像告白的话", "立刻转入行动计划"],
+      "must_include": ["互认心意但不耽搁", "计划攻阵眼"],
+      "must_not": ["整章纯甜无推进"],
+      "hook_end": "攻阵眼需要第三人：裘陌或明玥必须选一个押",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t019",
+      "volume_id": "v2",
+      "order": 19,
+      "chapter_title": "第19章 押注",
+      "goal": "说服/逼迫第三方站队，集齐破阵条件",
+      "conflict": "背叛风险",
+      "beats": ["谈判", "反水疑云", "成行"],
+      "must_include": ["代价交易", "苏鹤关键作用"],
+      "must_not": ["无条件义助"],
+      "hook_end": "队伍里有内鬼的痕迹",
+      "pov": "林清",
+      "status": "pending"
+    },
+    {
+      "id": "t020",
+      "volume_id": "v2",
+      "order": 20,
+      "chapter_title": "第20章 阵眼之前",
+      "goal": "抵达血祭阵眼，回顾伏笔，完成战前最终分工",
+      "conflict": "内鬼发难",
+      "beats": ["潜入", "内鬼", "损失"],
+      "must_include": ["有人受伤或暂时失联", "计划被迫改"],
+      "must_not": ["全员满状态开打"],
+      "hook_end": "阵眼开启，需要共命双方同时心死或心诺——抉择题",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t021",
+      "volume_id": "v2",
+      "order": 21,
+      "chapter_title": "第21章 心诺",
+      "goal": "用「共命真心」而非牺牲一人破开第一层阵",
+      "conflict": "旧伤与恨",
+      "beats": ["试错", "心诺", "阵裂"],
+      "must_include": ["主题落地：把柄交予对方", "战斗与感情一体"],
+      "must_not": ["无铺垫的力量暴涨"],
+      "hook_end": "谢君临亲自降临",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t022",
+      "volume_id": "v2",
+      "order": 22,
+      "chapter_title": "第22章 宗主",
+      "goal": "最终对决谢君临，揭露血祭与亲情的扭曲",
+      "conflict": "战力差 + 舆论/宗门兵力",
+      "beats": ["对峙", "揭罪", "苦战"],
+      "must_include": ["制度之恶", "男主当众断绝父子"],
+      "must_not": ["外人突然神兵天降灭Boss"],
+      "hook_end": "谢君临启动「同归于尽」血祭反噬",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t023",
+      "volume_id": "v2",
+      "order": 23,
+      "chapter_title": "第23章 莲燃",
+      "goal": "二人合力止住反噬，阵眼毁，活下来但重伤",
+      "conflict": "谁承担最后一击的代价",
+      "beats": ["选择", "共担", "余波"],
+      "must_include": ["代价真实（位分/灵脉/名声）", "HE倾向但未甜腻"],
+      "must_not": ["无伤完美胜"],
+      "hook_end": "天衡盟要「接收」南境真空",
+      "pov": "双",
+      "status": "pending"
+    },
+    {
+      "id": "t024",
+      "volume_id": "v2",
+      "order": 24,
+      "chapter_title": "第24章 鹤归",
+      "goal": "收束：安顿遗民、拒绝被收编、感情落点、开放式后路可番外",
+      "conflict": "胜利后的政治收拾",
+      "beats": ["善后", "拒绝收编", "二人去向"],
+      "must_include": ["主题回响", "苏鹤有着落", "感情确认一句足矣"],
+      "must_not": ["大婚流水账三章", "新地图无意义扩写"],
+      "hook_end": "可停可续：远方仍有血祭余党的灯",
+      "pov": "林清",
+      "status": "pending"
+    }
+  ],
+  "locks": {
+    "logline": "女主潜入死敌宗门复仇，却与少主缔结共命契，二人必须在爱情与灭门真相之间选择：联手掀翻血祭，或一起陪葬旧秩序。",
+    "forbidden": [
+      "女主无脑白莲或无代价原谅",
+      "男主无代价洗白家族血祭罪",
+      "后宫/三角拉扯稀释主线",
+      "神器/高人空降无铺垫解决终局",
+      "纯甜日常连续超过半章且无信息推进"
+    ],
+    "mustHonor": [
+      "男女互救各至少一次且有代价",
+      "共命契贯穿始终并服务主题",
+      "血祭罪证必须被看见，不能只靠嘴说",
+      "终局二人并肩，不是一方单方面拯救",
+      "感情线必须推动破局，禁止只谈恋爱"
+    ],
+    "lockedFields": ["logline", "world", "cast", "spine"]
+  },
+  "memoryRoll": [],
+  "chapters": [],
+  "activeChapterId": null,
+  "activeTaskId": "t001",
+  "pipelineLog": [
+    {
+      "t": 0,
+      "msg": "已载入示例策划《红莲渡鹤归》（玄幻+言情双强）"
+    }
+  ],
+  "autoWrite": false
+}
