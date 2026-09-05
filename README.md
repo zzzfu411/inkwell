@@ -9,6 +9,30 @@
 
 当前版本 **0.19.0**。Windows 正式客户端是 `mogao-tauri/release/Inkwell.exe`（需与同目录 `ui/` 一起分发）。
 
+## 界面一览
+
+<p align="center">
+  <img src="docs/screenshots/write-workspace.png" alt="写作工作台 · Writing workspace" />
+</p>
+<p align="center"><em>写作工作台 · Writing workspace</em> — 章节、正文、故事检查器；按本章任务落笔。连续性按审查结果区分（未审查 / 本章审查通过），不再把空审查显示成「安全」。</p>
+
+| 书库 · Library | 主线与任务 · Story tasks |
+|:---:|:---:|
+| <img src="docs/screenshots/library.png" alt="书库" /> | <img src="docs/screenshots/story-tasks.png" alt="主线与任务" /> |
+| 一书一夹，对接资源管理器 / Obsidian | 锁主线、禁区与章任务板，防止写偏 |
+
+| 人物关系 · Character graph | 叙事分析 · Narrative analysis |
+|:---:|:---:|
+| <img src="docs/screenshots/character-graph.png" alt="人物关系星图" /> | <img src="docs/screenshots/analysis.png" alt="叙事分析工作台" /> |
+| 关系星图、人物档案与关系演化 | 切章分块、载入正文，抽取可复核的人物与关系 |
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="设置 · Settings" />
+</p>
+<p align="center"><em>设置 · Settings</em> — 分类导航、滚动说明与开关布局；候选生产引擎的质量闸门只在启用后生效。</p>
+
+截图来自 `novel-writer/` 真实界面（Python 调试服），示例作品《红莲渡鹤归》加三章本地手写正文。分析未调用付费模型：载入章节、识别切章，关系星图来自书内已有图谱。
+
 ## 它做什么
 
 - **一书一夹** 书库，可对接资源管理器 / Obsidian
