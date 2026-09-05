@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "schemaMigrationHistory": [],
+  "id": "external-edit-book",
+  "slug": "external-edit-book",
+  "title": "外部改稿作品",
+  "tasks": [
+    { "id": "task-1", "status": "done", "order": 1 }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-1",
+      "taskId": "task-1",
+      "order": 1,
+      "body": "磁盘工具改过的新正文。",
+      "handoffStatus": "done",
+      "production": {
+        "schemaVersion": 1,
+        "status": "done",
+        "stage": "done",
+        "bodyAuthoritative": true,
+        "bodySig": "body_2a5c8c72",
+        "gate": { "accepted": true },
+        "qualityReview": { "overall": 9 },
+        "scenes": [],
+        "errors": [],
+        "contextManifests": []
+      }
+    }
+  ],
+  "pipelineLog": []
+}

@@ -1,0 +1,180 @@
+{
+  "contractVersion": 2,
+  "productVersion": "0.19.0",
+  "authority": "rust",
+  "endpoints": {
+    "health": {
+      "method": "GET",
+      "path": "/api/health",
+      "status": 200,
+      "required": [
+        "ok",
+        "app",
+        "version",
+        "engine",
+        "epoch",
+        "auth"
+      ]
+    },
+    "library": {
+      "method": "GET",
+      "path": "/api/library",
+      "status": 200,
+      "required": [
+        "version",
+        "books",
+        "updatedAt",
+        "vault"
+      ]
+    },
+    "createBook": {
+      "method": "POST",
+      "path": "/api/books",
+      "status": 200,
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "chapters",
+        "_bookRevision"
+      ]
+    },
+    "loadBook": {
+      "method": "GET",
+      "path": "/api/books/{slug}",
+      "status": 200,
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "chapters",
+        "_mtime",
+        "_bookRevision"
+      ]
+    },
+    "saveBook": {
+      "method": "PUT",
+      "path": "/api/books/{slug}",
+      "status": 200,
+      "required": [
+        "ok",
+        "slug",
+        "updatedAt",
+        "path",
+        "mtime",
+        "version",
+        "epoch",
+        "saveWarnings",
+        "chapterBaselines",
+        "bookRevision"
+      ]
+    },
+    "reloadBook": {
+      "method": "POST",
+      "path": "/api/books/{slug}/reload",
+      "status": 200,
+      "required": [
+        "id",
+        "slug",
+        "title",
+        "chapters",
+        "_mtime",
+        "_bookRevision"
+      ]
+    },
+    "readFile": {
+      "method": "GET",
+      "path": "/api/books/{slug}/file?path={file}",
+      "status": 200,
+      "required": [
+        "slug",
+        "path",
+        "name",
+        "ext",
+        "content",
+        "mtime",
+        "size",
+        "revision"
+      ]
+    },
+    "writeFile": {
+      "method": "PUT",
+      "path": "/api/books/{slug}/file",
+      "status": 200,
+      "required": [
+        "ok",
+        "slug",
+        "path",
+        "mtime",
+        "size",
+        "revision"
+      ]
+    },
+    "watch": {
+      "method": "GET",
+      "path": "/api/books/{slug}/watch",
+      "status": 200,
+      "required": [
+        "slug",
+        "files",
+        "scannedAt",
+        "pollHintMs",
+        "epoch"
+      ]
+    },
+    "deleteBook": {
+      "method": "DELETE",
+      "path": "/api/books/{slug}",
+      "status": 200,
+      "required": [
+        "ok",
+        "epoch"
+      ]
+    }
+  },
+  "errors": {
+    "required": [
+      "ok",
+      "error.code",
+      "error.message",
+      "error.status"
+    ],
+    "invalidRequest": {
+      "status": 400,
+      "code": "INVALID_REQUEST"
+    },
+    "notFound": {
+      "status": 404,
+      "code": "NOT_FOUND"
+    },
+    "unauthorized": {
+      "status": 401,
+      "code": "UNAUTHORIZED",
+      "formalOnly": true
+    }
+  },
+  "concurrency": {
+    "warningKind": "externalConflict",
+    "baselineFields": [
+      "id",
+      "file",
+      "mtime",
+      "revision"
+    ],
+    "rule": "File and book writes require observed content versions; stale metadata/file updates return 409, stale chapter bodies are preserved with warnings."
+  },
+  "scenario": {
+    "title": "HTTP 合同测试",
+    "idea": "验证正式与调试后端的一致语义",
+    "chapter": {
+      "id": "contract-chapter-1",
+      "order": 1,
+      "title": "共同基线",
+      "taskId": null,
+      "body": "共同起点。",
+      "handoffStatus": "done"
+    },
+    "localBody": "本地旧基线之后的作者改稿。",
+    "externalBody": "磁盘上的更新版本必须被保留。"
+  }
+}

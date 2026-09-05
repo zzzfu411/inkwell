@@ -1,5 +1,6 @@
 //! 书生命周期：创建 / 加载 / 保存 / 删除 / 重命名 / 导入 / 快照 / 树
 use super::classify::{classify_path, PathKind};
+use super::concurrency::{check_revision, content_revision, metadata_revision};
 use super::util::{
     copy_dir_all, default_book, dump_chapter_md, mtime_ms, now_ms, parse_chapter_md, read_json,
     safe_filename, slugify, system_time_ms, unique_slug, write_json, write_text_atomic,
@@ -39,6 +40,7 @@ pub fn chapter_baselines(project: &Value) -> Value {
                 "order": ch.get("order").cloned().unwrap_or(Value::Null),
                 "file": file,
                 "mtime": mtime,
+                "revision": ch.get("_fileRevision"),
             }))
         })
         .collect();
@@ -67,7 +69,7 @@ impl Vault {
             let _ = fs::remove_dir_all(self.books.join(&slug));
             return Err(error);
         }
-        Ok(proj)
+        self.load_book(&slug)
     }
 
     pub fn delete_book(&self, slug: &str) -> Result<()> {
@@ -82,6 +84,7 @@ impl Vault {
     }
 
     pub fn load_book(&self, slug: &str) -> Result<Value> {
+        let _g = IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bdir = self.book_dir(slug)?;
         if !bdir.is_dir() {
             bail!("book not found: {}", slug);
@@ -190,12 +193,39 @@ impl Vault {
         }
         proj["_path"] = json!(bdir.to_string_lossy());
         proj["_mtime"] = json!(mtime_ms(&bdir.join("book.json")).unwrap_or(0));
+        proj["_bookRevision"] = json!(metadata_revision(&bdir)?);
         Ok(proj)
     }
 
     pub fn save_book(&self, slug: &str, mut project: Value, do_snapshot: bool) -> Result<Value> {
+        self.save_book_impl(slug, &mut project, do_snapshot, false)
+    }
+
+    pub fn save_book_checked(&self, slug: &str, mut project: Value) -> Result<Value> {
+        if let Some(obj) = project.as_object_mut() {
+            obj.remove("_forceChapterOverwrite");
+        }
+        self.save_book_impl(slug, &mut project, true, true)
+    }
+
+    fn save_book_impl(
+        &self,
+        slug: &str,
+        incoming: &mut Value,
+        do_snapshot: bool,
+        checked: bool,
+    ) -> Result<Value> {
         let _g = IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bdir = self.book_dir(slug)?;
+        let mut project = incoming.clone();
+        if checked {
+            check_revision(
+                project.get("_bookRevision").and_then(Value::as_str),
+                &metadata_revision(&bdir)?,
+                true,
+                "BOOK",
+            )?;
+        }
         fs::create_dir_all(&bdir)?;
         for sub in ["章节", "策划", "关系", "记忆", "锁定"] {
             fs::create_dir_all(bdir.join(sub))?;
@@ -235,6 +265,7 @@ impl Vault {
             o.remove("_dirty");
             o.remove("_mtime");
             o.remove("_stub");
+            o.remove("_bookRevision");
             o.remove("clearChapters");
             o.remove("_clearChapters");
             o.remove("_forceChapterOverwrite");
@@ -314,7 +345,11 @@ impl Vault {
                         let (disk_meta, disk_body) = parse_chapter_md(&raw);
                         let incoming_body = ch.get("body").and_then(|v| v.as_str()).unwrap_or("");
                         // slim 缓存会把已落盘章的 body 置成空串；禁止用空串原子盖掉磁盘正文。
-                        if incoming_body.trim().is_empty() && !disk_body.trim().is_empty() {
+                        if (ch.get("_bodyLoaded").and_then(Value::as_bool) != Some(true)
+                            || !ch.get("body").is_some_and(Value::is_string))
+                            && incoming_body.trim().is_empty()
+                            && !disk_body.trim().is_empty()
+                        {
                             let disk_name = source_path
                                 .file_name()
                                 .and_then(|s| s.to_str())
@@ -337,7 +372,13 @@ impl Vault {
                         let disk_title = disk_meta.get("title").map(String::as_str).unwrap_or("");
                         let content_diff = disk_body != incoming_body
                             || (!disk_title.is_empty() && disk_title != title);
-                        let disk_changed = if baseline > 0 {
+                        let disk_changed = if let Some(revision) =
+                            ch.get("_fileRevision").and_then(Value::as_str)
+                        {
+                            revision != content_revision(&raw)
+                        } else if checked {
+                            true
+                        } else if baseline > 0 {
                             disk_mtime > baseline.saturating_add(1)
                         } else {
                             disk_mtime > incoming_updated.saturating_add(500)
@@ -385,6 +426,8 @@ impl Vault {
                         }
                     }
                     ch["_fileMtime"] = json!(mtime_ms(&chap_path).unwrap_or(now_ms()));
+                    ch["_fileRevision"] = json!(content_revision(&md));
+                    ch["_bodyLoaded"] = json!(true);
                     new_chapters.push(ch);
                 }
                 if chap_dir.is_dir() {
@@ -577,6 +620,7 @@ impl Vault {
         write_text_atomic(&bdir.join("README.md"), &readme)?;
         bump_content_epoch();
         let _ = self.rescan_library();
+        project["_bookRevision"] = json!(metadata_revision(&bdir)?);
         if !save_warnings.is_empty() {
             project["_saveWarnings"] = json!(save_warnings);
         }
@@ -630,6 +674,8 @@ impl Vault {
             "updatedAt",
             "_file",
             "_fileMtime",
+            "_fileRevision",
+            "_bodyLoaded",
         ] {
             if let Some(value) = loaded.get(key) {
                 let skip_empty = matches!(key, "taskId" | "title")
@@ -688,6 +734,8 @@ impl Vault {
             "updatedAt": meta.get("updatedAt").and_then(|s| s.parse::<u64>().ok()).unwrap_or_else(now_ms),
             "_file": format!("章节/{name}"),
             "_fileMtime": mtime_ms(path).unwrap_or(0),
+            "_fileRevision": content_revision(&raw),
+            "_bodyLoaded": true,
         }))
     }
 
@@ -1082,7 +1130,7 @@ impl Vault {
         let mut book = self.load_book(slug)?;
         book["title"] = json!(title);
         // save_book 自持 IO_LOCK
-        self.save_book(slug, book, true)
+        self.save_book_checked(slug, book)
     }
 
     /// 重命名书：可选同时改文件夹 slug。
@@ -1265,6 +1313,7 @@ mod save_book_tests {
 
         let mut slim = v.load_book(&slug).unwrap();
         slim["chapters"][0]["body"] = json!("");
+        slim["chapters"][0]["_bodyLoaded"] = json!(false);
         let saved = v.save_book(&slug, slim, false).unwrap();
 
         let chap_dir = v.book_dir(&slug).unwrap().join("章节");
@@ -1496,6 +1545,11 @@ mod save_book_tests {
         file.set_modified(future).unwrap();
         drop(file);
 
+        let external = fs::read_to_string(&chapter_path)
+            .unwrap()
+            .replace("first pass", "external pass");
+        fs::write(&chapter_path, external).unwrap();
+
         let mut stale = saved.clone();
         stale["chapters"][0]["body"] = json!("second pass stale");
         let stale_saved = v.save_book(&slug, stale, false).unwrap();
@@ -1509,9 +1563,9 @@ mod save_book_tests {
         );
         assert!(fs::read_to_string(&chapter_path)
             .unwrap()
-            .contains("first pass"));
+            .contains("external pass"));
 
-        let mut fresh = saved.clone();
+        let mut fresh = v.load_book(&slug).unwrap();
         fresh["chapters"][0]["body"] = json!("second pass");
         fresh["chapters"][0]["_fileMtime"] = json!(mtime_ms(&chapter_path).unwrap());
         let fresh_saved = v.save_book(&slug, fresh, false).unwrap();

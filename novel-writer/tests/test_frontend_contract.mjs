@@ -19,14 +19,42 @@ const storyRecords = fs.readFileSync(path.join(root, "story-records.js"), "utf8"
 const graphPanel = fs.readFileSync(path.join(root, "graph-panel.js"), "utf8");
 const composerReview = fs.readFileSync(path.join(root, "composer-review.js"), "utf8");
 const textMetrics = fs.readFileSync(path.join(root, "text-metrics.js"), "utf8");
+const productionEngine = fs.readFileSync(path.join(root, "production-engine.js"), "utf8");
+const productionQuality = fs.readFileSync(path.join(root, "production-quality.js"), "utf8");
+const chapterDrafting = fs.readFileSync(path.join(root, "chapter-drafting-service.js"), "utf8");
+const qualityRelease = fs.readFileSync(path.join(root, "quality-release.js"), "utf8");
+const config = fs.readFileSync(path.join(root, "config.js"), "utf8");
+const productionState = fs.readFileSync(path.join(root, "production-state.js"), "utf8");
+const chapterState = fs.readFileSync(path.join(root, "chapter-state.js"), "utf8");
+const projectMigrations = fs.readFileSync(path.join(root, "project-migrations.js"), "utf8");
+const conflictUseCases = fs.readFileSync(path.join(root, "conflict-use-cases.js"), "utf8");
+const persistenceUseCases = fs.readFileSync(path.join(root, "persistence-use-cases.js"), "utf8");
+const writeUseCases = fs.readFileSync(path.join(root, "write-use-cases.js"), "utf8");
+const planningService = fs.readFileSync(path.join(root, "planning-service.js"), "utf8");
+const handoffService = fs.readFileSync(path.join(root, "handoff-service.js"), "utf8");
+const legacyGenerationAdapter = fs.readFileSync(path.join(root, "legacy-generation-adapter.js"), "utf8");
+const memoryReducers = fs.readFileSync(path.join(root, "memory-reducers.js"), "utf8");
+const contextBudget = fs.readFileSync(path.join(root, "context-budget.js"), "utf8");
+const contextEvidence = fs.readFileSync(path.join(root, "context-evidence.js"), "utf8");
+const writeUi = fs.readFileSync(path.join(root, "write-ui.js"), "utf8");
+const runtimeObservability = fs.readFileSync(path.join(root, "runtime-observability.js"), "utf8");
+const diagnosticsUi = fs.readFileSync(path.join(root, "runtime-diagnostics-ui.js"), "utf8");
 
 const allIds = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
 const duplicateIds = [...new Set(allIds.filter((id, index) => allIds.indexOf(id) !== index))];
 assert.deepEqual(duplicateIds, [], `duplicate DOM ids: ${duplicateIds.join(", ")}`);
+assert.match(html, /id="btnExportDiagnostics"/);
+assert.match(app, /DiagnosticsUI\.bindDiagnosticsExport/);
+assert.match(diagnosticsUi, /function handleWriteFailure\(/);
+assert.match(runtimeObservability, /const ERROR_CATEGORIES = Object\.freeze\(\[/);
+for (const category of ["model", "retrieval", "plan", "quality", "handoff", "storage", "conflict", "cancel"]) {
+  assert.match(runtimeObservability, new RegExp(`"${category}"`));
+}
+assert.doesNotMatch(runtimeObservability, /fields\.(?:body|messages|apiKey|Authorization)/);
 
 const topbar = html.match(/<header class="topbar"[\s\S]*?<\/header>/)?.[0] || "";
 assert.ok(topbar, "topbar must exist");
-assert.equal((topbar.match(/class="mode(?:\s|\")/g) || []).length, 4, "topbar has four primary entries");
+assert.equal((topbar.match(/class="mode(?:\s|")/g) || []).length, 4, "topbar has four primary entries");
 for (const section of ["write", "story", "workspace", "analyze"]) {
   assert.match(topbar, new RegExp(`data-section="${section}"`));
 }
@@ -94,6 +122,10 @@ assert.match(html, /id="btnOpenChapters"[^>]+aria-controls="writeChaptersDrawer"
 assert.match(html, /id="btnWsToggleFiles"[^>]+aria-controls="wsFilesDrawer"[^>]+aria-expanded="false"/);
 assert.match(html, /id="wsFilesScrim"/);
 assert.match(html, /id="cfgOutputTokens"[^>]+min="512"[^>]+max="65536"/);
+assert.match(html, /契约化整章生产引擎（候选）/);
+assert.match(qualityRelease, /decision:\s*"hold"/);
+assert.match(qualityRelease, /productionDefaultEnabled:\s*false/);
+assert.match(config, /productionEngineEnabled:\s*qualityRelease\.productionDefaultEnabled === true/);
 assert.match(html, /id="cfgKey"[^>]+autocomplete="off"/);
 assert.match(html, /id="btnOpenInspector"[^>]+aria-controls="writeTaskDrawer"/);
 assert.match(html, /id="ws-tab-both"[^>]+aria-controls="wsEditorPane wsPreviewPane"/);
@@ -109,6 +141,33 @@ assert.match(html, /<script src="ui-shell\.js"><\/script>/);
 assert.match(html, /<script src="graph-view\.js"><\/script>/);
 assert.match(html, /<script src="write-ui\.js"><\/script>/);
 assert.match(html, /<script src="craft\.js"><\/script>/);
+assert.match(html, /<script src="chapter-state\.js"><\/script>/);
+assert.match(html, /<script src="project-migrations\.js"><\/script>/);
+assert.match(html, /<script src="production-state\.js"><\/script>/);
+assert.match(html, /<script src="conflict-use-cases\.js"><\/script>/);
+assert.match(html, /<script src="production-engine\.js"><\/script>/);
+assert.match(html, /<script src="chapter-drafting-service\.js"><\/script>/);
+assert.match(html, /<script src="production-quality\.js"><\/script>/);
+assert.ok(html.indexOf('src="chapter-drafting-service.js"') < html.indexOf('src="production-engine.js"'));
+assert.ok(html.indexOf('src="production-quality.js"') < html.indexOf('src="production-engine.js"'));
+assert.ok(html.indexOf('src="production-engine.js"') < html.indexOf('src="app.js"'));
+assert.ok(html.indexOf('src="chapter-state.js"') < html.indexOf('src="project-migrations.js"'));
+assert.ok(html.indexOf('src="project-migrations.js"') < html.indexOf('src="production-state.js"'));
+for (const consumer of ["store.js", "vault.js", "pipeline.js", "harness.js", "production-engine.js", "app.js"]) {
+  assert.ok(
+    html.indexOf('src="chapter-state.js"') < html.indexOf(`src="${consumer}"`),
+    `chapter-state.js must load before ${consumer}`
+  );
+}
+for (const consumer of ["store.js", "vault.js", "pipeline.js", "production-engine.js", "app.js"]) {
+  assert.ok(
+    html.indexOf('src="production-state.js"') < html.indexOf(`src="${consumer}"`),
+    `production-state.js must load before ${consumer}`
+  );
+}
+assert.match(html, /id="cfgProduction"/);
+assert.match(html, /id="cfgQualityGate"/);
+assert.match(html, /id="productionQuality"/);
 assert.match(html, /id="beatPlanBox"/);
 assert.match(html, /id="btnRefreshBeat"/);
 assert.match(html, /id="cfgChapterBeat"/);
@@ -149,39 +208,46 @@ assert.match(app, /UiShell\?\.migrateUiState/);
 assert.match(app, /UiShell\?\.startupModeForState/);
 assert.match(app, /function createManualChapter\(\)/);
 assert.match(app, /function captureWritingPosition\(immediate = false\)/);
-assert.match(app, /function renderWritingWelcome\(p, chapter\)/);
+assert.match(writeUi, /function renderWritingWelcome\(project, chapter\)/);
+assert.match(app, /WritingPresenter\.renderWritingWelcome/);
 assert.match(app, /\["write", uiState\.storyMode \|\| "control", "workspace", "analyze"\]/);
 assert.match(app, /\["pipeline", "control", "graph"\]/);
 assert.match(app, /renderWritingInspector/);
-assert.match(app, /function renderChapterHeaderState\(p, chapter/);
+assert.match(writeUi, /function renderChapterHeaderState\(project, chapter/);
+assert.match(app, /WritingPresenter\.renderChapterHeaderState/);
 assert.match(app, /function reviseFromAnnotation\(\)/);
-assert.match(app, /Pipe\.continueChapter/);
-assert.match(app, /Pipe\.reviseChapter/);
-assert.match(app, /Pipe\.rewritePassage/);
-assert.match(app, /Pipe\.reviseChapter[\s\S]*?handoffStatus === "done"/);
-assert.match(app, /Pipe\.rewritePassage[\s\S]*?handoffStatus === "done"/);
-assert.match(app, /setChapterCycleStatus\("局部修复交接"/);
-assert.match(pipeline, /kind: "author-annotation"/);
-assert.match(pipeline, /修订类操作采用成功后提交/);
-assert.match(pipeline, /chapter.craftScore/);
-assert.match(pipeline, /任务未覆盖/);
-assert.match(pipeline, /前文《\$\{chapter\.title \|\| chapter\.id\}》交接未完成，先补交接（不改正文）/);
-assert.match(pipeline, /const readOnlyCfg = \{ \.\.\.cfg, continuityAutoRepair: false \}/);
-assert.match(pipeline, /if \(isAbortError\(e\)\) throw e;/);
-assert.match(pipeline, /String\(ch\.handoffStatus \|\| ""\) === "stale"/);
-assert.match(pipeline, /function repairableIssues\(review\)[\s\S]*?String\(x\.evidence \|\| ""\)\.trim\(\)/);
+assert.match(app, /WriteCases\.continueDraft/);
+assert.match(app, /WriteCases\.revise/);
+assert.match(app, /WriteCases\.rewriteSelection/);
+assert.match(writeUseCases, /pipe\.reviseChapter/);
+assert.match(writeUseCases, /pipe\.rewritePassage/);
+assert.match(writeUseCases, /chapter\.handoffStatus !== "done"/);
+assert.match(writeUseCases, /ports\.chapterStatus\?\.\("局部修复交接"/);
+assert.match(legacyGenerationAdapter, /kind: "author-annotation"/);
+assert.match(legacyGenerationAdapter, /修订类操作采用成功后提交/);
+assert.match(legacyGenerationAdapter, /chapter.craftScore/);
+assert.match(handoffService, /任务未覆盖/);
+assert.match(handoffService, /前文《\$\{chapter\.title \|\| chapter\.id\}》交接未完成，先补交接（不改正文）/);
+assert.match(handoffService, /const readOnlyCfg = \{ \.\.\.cfg, continuityAutoRepair: false \}/);
+assert.match(handoffService, /if \(isAbortError\(e\)\) throw e;/);
+assert.match(handoffService, /String\(ch\.handoffStatus \|\| ""\) === "stale"/);
+assert.match(handoffService, /function repairableIssues\(review\)[\s\S]*?String\(x\.evidence \|\| ""\)\.trim\(\)/);
 assert.match(app, /renderCraftHint/);
 assert.match(app, /function initDetailsAccessibility\(\)[\s\S]*?setAttribute\("aria-expanded"/);
 assert.match(app, /function saveActiveChapterNow\(\)/);
 assert.match(app, /dataset\.storyTarget/);
 assert.match(app, /function setChapterCycleStatus\(scope, stage\)/);
 assert.match(app, /generationStagePresentation/);
-assert.match(app, /control\.hidden = false[\s\S]*?control\.hidden = true/);
-assert.match(app, /data-issue-action="repair"/);
+assert.match(app, /productionEngineEnabled/);
+assert.match(writeUseCases, /QUALITY_GATE_BLOCKED/);
+assert.match(writeUi, /function renderProductionQuality\(chapter\)/);
+assert.match(app, /function setGenerationStopControls\(active\)[\s\S]*?control\.hidden = !active/);
+assert.match(writeUseCases, /ports\.setStopControls\?\.\(true\)[\s\S]*?ports\.setStopControls\?\.\(false\)/);
+assert.match(writeUi, /data-issue-action="repair"/);
 assert.match(app, /function renderCanonRecords\(p\)/);
 assert.match(app, /function renderLoopRecords\(p\)/);
 assert.match(app, /function renderContinuityRecords\(p\)/);
-assert.match(app, /function graphForSelectedNode\(graph, selectedId\)/);
+assert.match(app, /const graphForSelectedNode = GraphPanel\.subgraphForNode/);
 assert.match(app, /renderGraphProfile\(filteredGraph, graphSelectedNodeId\)/);
 assert.match(app, /renderGraphTimeline\(filteredGraph, graphSelectedNodeId\)/);
 assert.doesNotMatch(app, /\$\("an(?:Profile|Timeline|GraphStats|NodeList|EdgeTable|MermaidBox)"\)/);
@@ -191,28 +257,21 @@ assert.match(app, /drawer\.inert = hidden/);
 assert.match(app, /function syncModalBackgroundInert\(activeModal\)/);
 assert.match(app, /async function reconcileSaveWarnings\([\s\S]*?submittedRevision = projectSaveRevisions\.read\(p\)/);
 assert.match(app, /async function resolveActiveSaveConflict\(choice\)/);
-assert.match(app, /detectedRevision: submittedRevision/);
-assert.equal(
-  (app.match(/reconcileSaveWarnings\(p, warnings, saveRevision\)/g) || []).length,
-  2,
-  "both async book-save paths must bind conflicts to the submitted revision"
-);
+assert.match(conflictUseCases, /detectedRevision: submittedRevision/);
+assert.match(persistenceUseCases, /deps\.reconcileWarnings\(project, warnings, revision\)/);
 // 保存会把磁盘 mtime 推新。两条保存路径都必须换掉乐观并发基线，
 // 否则同一次会话里第二次改同一章会撞上自己刚写的文件，冒出假的磁盘冲突。
-assert.equal(
-  (app.match(/Vault\.adoptChapterBaselines\?\.\(p, res, warnings\)/g) || []).length,
-  2,
-  "both async book-save paths must adopt the server's fresh chapter baselines"
-);
+assert.match(persistenceUseCases, /deps\.adoptBaselines\?\.\(project, result, warnings\)/);
+assert.match(app, /adoptBaselines:[\s\S]*?Vault\.adoptChapterBaselines/);
 assert.match(vault, /function adoptChapterBaselines\(project, saved, warnings\)/);
 assert.match(vault, /blocked\.has\(file\)/, "conflicted chapters must keep their old baseline");
-assert.match(app, /!projectSaveRevisions\.matches\(p, entry\.detectedRevision\)/);
+assert.match(conflictUseCases, /!deps\.revisionMatches\?\.\(project, entry\.detectedRevision\)/);
 assert.match(app, /assertSyncRequestSucceeded\(fxhr, "资料文件同步保存"\)/);
 assert.match(app, /assertSyncRequestSucceeded\(xhr, "作品同步保存"\)/);
 assert.match(app, /window\.__mogaoFlushSync[\s\S]*?Vault\.prepareProjectForSave\(p\)/);
 assert.match(app, /window\.__mogaoFlushSync[\s\S]*?JSON\.parse\(xhr\.responseText/);
-assert.match(app, /window\.__mogaoFlushSync[\s\S]*?kind === "externalConflict"[\s\S]*?persistSaveConflicts/);
-assert.match(app, /window\.__mogaoFlushSync[\s\S]*?kind === "externalConflict"[\s\S]*?return false/);
+assert.match(app, /window\.__mogaoFlushSync[\s\S]*?"externalConflict"[\s\S]*?"preservedExternal"[\s\S]*?persistSaveConflicts/);
+assert.match(app, /window\.__mogaoFlushSync[\s\S]*?"externalConflict"[\s\S]*?"preservedExternal"[\s\S]*?return false/);
 assert.match(app, /flushSucceeded[\s\S]*?Ws\?\.isDirty\?\.\(\)/);
 assert.doesNotMatch(app, /chapterFileSaved/);
 assert.match(app, /window\.NOVEL_MODAL_A11Y = \{ sync: syncModalBackgroundInert \}/);
@@ -233,12 +292,14 @@ assert.match(analyzeUi, /aria-live", kind === "err" \? "assertive" : "polite"/);
 assert.match(workspace, /const snapshot = captureSaveState\(\)/);
 assert.match(workspace, /const current = saveStateIsCurrent\(snapshot\)/);
 assert.match(workspace, /较早版本已保存[\s\S]*?dirty = true/);
-assert.match(workspace, /function markClean\(snapshot\)[\s\S]*?saveStateIsCurrent\(snapshot\)/);
+assert.match(workspace, /function markClean\(snapshot, saved\)[\s\S]*?saveStateIsCurrent\(snapshot\)/);
 assert.match(workspace, /if \(dirty && kind === "ok"\) return;/);
 assert.match(workspace, /const GENERATED_MIRROR_PATHS = new Set/);
 assert.match(workspace, /function generatedMirrorInfo\(path\)/);
 assert.match(workspace, /function syncReadOnly\([\s\S]*?ed\.readOnly = readOnly/);
 assert.match(workspace, /function saveCurrent\(\)[\s\S]*?guardFileMutate\("保存"\)/);
+assert.match(workspace, /function guardFileMutate[\s\S]*?getProjectReadOnlyReason/);
+assert.match(workspace, /function doRestore[\s\S]*?guardFileMutate\("恢复快照"/);
 assert.match(app, /Ws\?\.syncReadOnly\?\.\(\{ announce: genLocked \}\)/);
 assert.doesNotMatch(app, /ed\.readOnly = genLocked/);
 assert.match(store, /function savePendingConflicts\(entries\)/);
@@ -326,8 +387,8 @@ for (const selector of [":root,\\s*html\\[data-theme=\"soft-paper\"\\]", "html\\
 }
 
 // 交接文案只有一个出处：章头说「交接失败」时状态条不许说「待交接」。
-assert.match(app, /function handoffStatusSuffix\(chapter, pendingLabel\)/);
-assert.match(app, /if \(state === "failed"\) return \{ suffix: "交接失败，待重试", kind: "warn" \}/);
+assert.match(app, /const handoffStatusSuffix = \(chapter, pendingLabel\)/);
+assert.match(writeUi, /if \(state === "failed"\) return \{ suffix: "交接失败，待重试", kind: "warn" \}/);
 assert.equal((app.match(/handoffStatusSuffix\(/g) || []).length, 5, "定义一次，四条生成路径各用一次");
 for (const prefix of ["修订完成", "重写完成", "正文已生成", "局部修复完成"]) {
   assert.match(app, new RegExp(`${prefix} · \\$\\{\\w+\\.suffix\\}`), `${prefix} 必须复用交接文案`);
@@ -363,9 +424,111 @@ assert.doesNotMatch(textMetrics, /\.match\(/);
 assert.match(app, /GraphPanel\.buildTracks\(/);
 assert.match(app, /ComposerReview\.stillApplies\(composerReviewState, p, chapter\)/);
 assert.match(app, /ComposerReview\.restore\(/);
+assert.match(composerReview, /NOVEL_CHAPTER_STATE\?\.restoreProjection/);
 assert.match(uiShell, /function generationRailState\(label, kind\)/);
+assert.match(uiShell, /production-quality|quality-review|scene-writing/);
 assert.match(app, /UiShell\?\.generationRailState\?\.\(label, kind\)/);
 assert.doesNotMatch(app, /const stages = \["context", "model", "review", "handoff"\]/);
+assert.match(productionEngine, /function normalizeContract/);
+assert.match(productionEngine, /function sceneContractCoverage/);
+assert.match(productionEngine, /function qualityGate/);
+assert.match(productionQuality, /window\.NOVEL_PRODUCTION_QUALITY = \(\(\) => \{/);
+assert.match(productionEngine, /Quality\(\)\.qualityGate/);
+assert.doesNotMatch(
+  productionQuality.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""),
+  /document\.|getElementById|innerHTML|localStorage|sessionStorage|fetch\(|XMLHttpRequest|NOVEL_DEFAULTS/,
+  "production quality must remain an injected, deterministic domain boundary"
+);
+assert.match(productionEngine, /generateCoherentChapter/);
+assert.match(productionEngine, /productionMode === "chapter"/);
+assert.match(productionEngine, /QUALITY_GATE_BLOCKED/);
+assert.match(productionEngine, /onCheckpoint/);
+assert.match(productionState, /window\.NOVEL_PRODUCTION_STATE = \(\(\) => \{/);
+assert.match(chapterDrafting, /window\.NOVEL_CHAPTER_DRAFTING = \(\(\) => \{/);
+assert.doesNotMatch(
+  chapterDrafting.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""),
+  /document\.|getElementById|innerHTML|localStorage|sessionStorage|fetch\(|XMLHttpRequest/,
+  "chapter drafting service must remain a port-injected, DOM/storage/network-free boundary"
+);
+const productionStateExecutable = productionState
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/\/\/.*$/gm, "");
+assert.doesNotMatch(
+  productionStateExecutable,
+  /document\.|getElementById|innerHTML|localStorage|sessionStorage|fetch\(|XMLHttpRequest/,
+  "production-state.js must remain a DOM-free, storage-free domain boundary"
+);
+for (const method of [
+  "bodySignature",
+  "invalidateAfterBodyEdit",
+  "reconcileChapter",
+  "reconcileProject",
+  "canHandoff",
+]) {
+  assert.match(productionState, new RegExp(`function ${method}\\(`));
+}
+for (const [name, source, globalName] of [
+  ["chapter-state.js", chapterState, "NOVEL_CHAPTER_STATE"],
+  ["project-migrations.js", projectMigrations, "NOVEL_PROJECT_MIGRATIONS"],
+  ["conflict-use-cases.js", conflictUseCases, "NOVEL_CONFLICT_USE_CASES"],
+  ["persistence-use-cases.js", persistenceUseCases, "NOVEL_PERSISTENCE_USE_CASES"],
+  ["write-use-cases.js", writeUseCases, "NOVEL_WRITE_USE_CASES"],
+  ["planning-service.js", planningService, "NOVEL_PLANNING_SERVICE"],
+  ["handoff-service.js", handoffService, "NOVEL_HANDOFF_SERVICE"],
+  ["legacy-generation-adapter.js", legacyGenerationAdapter, "NOVEL_LEGACY_GENERATION_ADAPTER"],
+  ["memory-reducers.js", memoryReducers, "NOVEL_MEMORY_REDUCERS"],
+  ["context-budget.js", contextBudget, "NOVEL_CONTEXT_BUDGET"],
+  ["context-evidence.js", contextEvidence, "NOVEL_CONTEXT_EVIDENCE"],
+]) {
+  const executableSource = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.match(source, new RegExp(`window\\.${globalName} = \\(\\(\\) => \\{`));
+  assert.doesNotMatch(
+    executableSource,
+    /document\.|getElementById|innerHTML|localStorage|sessionStorage|fetch\(|XMLHttpRequest/,
+    `${name} must remain a DOM-free, storage-free domain boundary`
+  );
+}
+for (const method of [
+  "requestRevision",
+  "markWriting",
+  "markWritten",
+  "markAccepted",
+  "startHandoff",
+  "markDigestComplete",
+  "completeHandoff",
+  "markHandoffStale",
+  "captureProjection",
+  "restoreProjection",
+  "repairProject",
+]) {
+  assert.match(chapterState, new RegExp(`function ${method}\\(`));
+}
+assert.match(chapterState, /const PRODUCTION_TRANSITIONS = Object\.freeze/);
+assert.match(chapterState, /ILLEGAL_CHAPTER_TRANSITION/);
+for (const method of ["inspect", "migrateProject", "compatibility", "assertWritable"]) {
+  assert.match(projectMigrations, new RegExp(`function ${method}\\(`));
+}
+assert.match(vault, /NOVEL_PROJECT_MIGRATIONS\?\.migrateProject/);
+assert.match(vault, /NOVEL_PROJECT_MIGRATIONS\?\.assertWritable/);
+assert.match(store, /NOVEL_PROJECT_MIGRATIONS\?\.migrateProject/);
+assert.match(app, /function projectReadOnlyReason\(p = project\(\)\)/);
+assert.match(workspace, /getProjectReadOnlyReason/);
+assert.match(app, /SaveConflicts\.enqueueDiverged/);
+assert.match(app, /SaveConflicts\.hydrate/);
+assert.match(conflictUseCases, /enqueueDiverged\(queue, project, freshBook/);
+assert.match(conflictUseCases, /hydrateProject\(queue, project\)/);
+assert.match(vault, /function reconcileLoadedBook/);
+assert.match(vault, /NOVEL_PRODUCTION_STATE\?\.reconcileProject/);
+assert.match(handoffService, /ProductionState\(\)\?\.canHandoff/);
+assert.match(productionEngine, /NOVEL_PRODUCTION_STATE\?\.bodySignature/);
+assert.match(
+  srcBetween(app, "function mergeWorkspaceIntoProject", "async function saveWorkspaceOnly"),
+  /invalidateProductionAfterAuthorEdit/
+);
+assert.match(
+  conflictUseCases,
+  /reconcileProductionChapter|invalidateAfterAuthorEdit/
+);
 
 // 列表面板用事件委托：一次重画上百张卡，不该重新挂上百个监听
 assert.match(app, /function bindDelegatedPanelActions\(\)/);
@@ -520,12 +683,19 @@ assert.match(formBindFn, /markDirty\(\)/);
 assert.match(formBindFn, /persistOnly\(\{ immediateDisk: true \}\)/);
 
 const syncFn = srcBetween(app, "function syncEditorToProject()", "function selectChapter");
-assert.match(app, /function projectFormEqual\(/);
-assert.match(app, /function formGraphEqual\(/);
-assert.match(syncFn, /noteFormChange\(/);
+assert.match(persistenceUseCases, /function projectFormEqual\(/);
+assert.match(persistenceUseCases, /function formGraphEqual\(/);
+assert.match(app, /function normalizedTargetChapters\(value\)/);
+assert.match(syncFn, /WriteUI\.captureProjectForm/);
+assert.match(syncFn, /PersistenceFactory\.applyProjectForm/);
+assert.match(syncFn, /normalizeTargetChapters: normalizedTargetChapters/);
 assert.match(syncFn, /markDirty\(\)/);
-assert.match(syncFn, /formGraphEqual\(p\.graph, g\)/);
+assert.match(persistenceUseCases, /formGraphEqual\(project\.graph, graph\)/);
 const syncReadIds = [...new Set([...syncFn.matchAll(/\$\("([^"]+)"\)/g)].map((match) => match[1]))];
+const captureFormFn = srcBetween(writeUi, "function captureProjectForm", "function handoffPresentation");
+const capturedFormIds = [
+  ...captureFormFn.matchAll(/(?:byId|value)\("([^"]+)"\)/g),
+].map((match) => match[1]);
 const formFieldTable = srcBetween(app, "const PROJECT_FORM_FIELDS = [", "function bindProjectFormPersistence");
 const listedFormFields = new Set([...formFieldTable.matchAll(/"([^"]+)"/g)].map((match) => match[1]));
 const dedicatedDirtyIds = new Set(["manuscript", "chapterTitle", "beatSceneList"]);
@@ -537,21 +707,40 @@ assert.deepEqual(
   [],
   `syncEditorToProject reads ${syncReadsWithoutDirtyChain.join(", ")} without a dirty chain`
 );
+assert.deepEqual(
+  capturedFormIds.filter((id) => !listedFormFields.has(id)),
+  [],
+  "write-ui captureProjectForm may only read controls registered in PROJECT_FORM_FIELDS"
+);
 assert.ok(listedFormFields.has("graphJson"), "graphJson must be on the form dirty list");
 assert.match(app, /\$\("manuscript"\)\.addEventListener\("input"/);
+
+const authorHintFn = srcBetween(app, "function refreshAuthorNameHint()", "function loadPipelineView");
+assert.match(authorHintFn, /const ideaEl = \$\("ideaInput"\)/);
+assert.match(authorHintFn, /ideaInput: ideaEl \? ideaEl\.value/);
+assert.match(authorHintFn, /authorNote: noteEl \? noteEl\.value/);
+assert.doesNotMatch(authorHintFn, /\$\("ideaInput"\)\?\.value \|\| project\(\)\?\.ideaInput/);
 assert.match(app, /\$\("chapterTitle"\)\.addEventListener\("input"/);
 assert.match(app, /syncBeatPlanFromUi\(ch, \{ asUserEdit: true \}\)/);
 
-const loadControlFn = srcBetween(app, "function loadControlView()", "function storyLabel");
+const loadControlFn = srcBetween(app, "function loadControlView()", "const storyLabel");
 assert.match(loadControlFn, /recoverConcatenatedStylePacing/);
 assert.match(loadControlFn, /\$\("styleDialogue"\)/);
 assert.doesNotMatch(loadControlFn, /\[style\.pacing, style\.dialogue\]/);
 assert.match(uiShell, /function recoverConcatenatedStylePacing\(pacing, dialogue\)/);
 
 const digestFn = srcBetween(app, '$("btnDigest")', "function saveActiveChapterNow");
+assert.match(digestFn, /WriteCases\.handoffExisting/);
+const lockLease = srcBetween(writeUseCases, "function acquireLock", "async function run");
+assert.match(lockLease, /const token = runToken/);
+assert.match(lockLease, /const current = \(\) => token === runToken/);
+assert.match(lockLease, /release\(\)[\s\S]*?if \(current\(\)\) ports\.setLock\?\.\(false\)/);
+const handoffUseCase = srcBetween(writeUseCases, "async function handoffExisting", "async function repairIssue");
 assert.ok(
-  digestFn.indexOf("setGenLock(true") >= 0 && digestFn.indexOf("setGenLock(true") < digestFn.indexOf("handoffChapter"),
-  "digest must lock before handoff await"
+  handoffUseCase.indexOf("acquireLock(ports, chapter.id)") >= 0 &&
+    handoffUseCase.indexOf("acquireLock(ports, chapter.id)") < handoffUseCase.indexOf("pipe.handoffChapter") &&
+    handoffUseCase.indexOf("pipe.handoffChapter") < handoffUseCase.indexOf("lock.release()"),
+  "handoff use case must hold its token-owned lock lease across the handoff await"
 );
 const steerFn = srcBetween(app, '$("btnSteer")', '$("btnAddTask")');
 assert.ok(
@@ -559,46 +748,50 @@ assert.ok(
   "steer must lock before steer await"
 );
 const repairFn = srcBetween(app, 'action === "repair"', "快捷键");
+assert.match(repairFn, /WriteCases\.repairIssue/);
+const repairUseCase = srcBetween(writeUseCases, "async function repairIssue", "return {");
 assert.ok(
-  repairFn.indexOf("setGenLock(true") >= 0 &&
-    repairFn.indexOf("setGenLock(true") < repairFn.indexOf("repairChapterContinuity"),
-  "repair must lock before repair await"
+  repairUseCase.indexOf("acquireLock(ports, chapter.id)") >= 0 &&
+    repairUseCase.indexOf("acquireLock(ports, chapter.id)") < repairUseCase.indexOf("pipe.repairChapterContinuity") &&
+    repairUseCase.indexOf("pipe.repairChapterContinuity") < repairUseCase.indexOf("lock.release()"),
+  "repair use case must hold its token-owned lock lease across the repair await"
 );
 assert.doesNotMatch(digestFn, /if \(guardGen\(/);
 assert.doesNotMatch(steerFn, /if \(guardGen\(/);
 
-const withAbortFn = srcBetween(app, "async function withAbort", "function confirmSpineRisk");
-assert.match(app, /let abortRunToken = 0/);
-assert.match(withAbortFn, /const runToken = \+\+abortRunToken/);
-assert.match(withAbortFn, /runToken === abortRunToken/);
-const abortCatchAt = withAbortFn.indexOf("} catch (e)");
-const abortFinallyAt = withAbortFn.indexOf("} finally {");
-assert.ok(abortCatchAt >= 0 && abortFinallyAt > abortCatchAt, "withAbort must have catch then finally");
-const abortCatch = withAbortFn.slice(abortCatchAt, abortFinallyAt);
-const abortFinally = withAbortFn.slice(abortFinallyAt);
+const withAbortFn = srcBetween(app, "function withAbort", "function confirmSpineRisk");
+assert.match(withAbortFn, /WriteCases\.run/);
+const abortUseCase = srcBetween(writeUseCases, "async function run", "function addWritingHints");
+assert.match(abortUseCase, /const token = \+\+runToken/);
+assert.match(abortUseCase, /token === runToken/);
+const abortCatchAt = abortUseCase.indexOf("} catch (error)");
+const abortFinallyAt = abortUseCase.indexOf("} finally {");
+assert.ok(abortCatchAt >= 0 && abortFinallyAt > abortCatchAt, "write runner must have catch then finally");
+const abortCatch = abortUseCase.slice(abortCatchAt, abortFinallyAt);
+const abortFinally = abortUseCase.slice(abortFinallyAt);
 assert.ok(
-  abortCatch.indexOf("isCurrent") >= 0 && abortCatch.indexOf("isCurrent") < abortCatch.indexOf("已停止"),
-  "superseded withAbort must not write 已停止"
+  abortCatch.indexOf("current()") >= 0 && abortCatch.indexOf("current()") < abortCatch.indexOf("onRunError"),
+  "superseded write runner must not report an error"
 );
-assert.ok(abortFinally.indexOf("isCurrent") >= 0, "withAbort finally must check the run token");
+assert.ok(abortFinally.indexOf("current()") >= 0, "write runner finally must check the run token");
 assert.ok(
-  abortFinally.indexOf("isCurrent") < abortFinally.indexOf("abortCtrl = null"),
-  "only the current withAbort may clear abortCtrl"
-);
-assert.ok(
-  abortFinally.indexOf("isCurrent") < abortFinally.indexOf("setGenLock(false)"),
-  "only the current withAbort may unlock"
+  abortFinally.indexOf("current()") < abortFinally.indexOf("abortController = null"),
+  "only the current write runner may clear its AbortController"
 );
 assert.ok(
-  abortFinally.indexOf("flushActiveChapterStream()") >= 0 &&
-    abortFinally.indexOf("flushActiveChapterStream()") < abortFinally.indexOf("save({ immediateDisk: true })"),
+  abortFinally.indexOf("current()") < abortFinally.indexOf("ports.setLock?.(false)"),
+  "only the current write runner may unlock"
+);
+assert.ok(
+  abortFinally.indexOf("ports.flushStream?.()") >= 0 &&
+    abortFinally.indexOf("ports.flushStream?.()") < abortFinally.indexOf("ports.persist?.()"),
   "stream flush must run before save copies textarea back onto chapter body"
 );
 assert.match(
   srcBetween(app, "function paintActiveChapterStreamNow", "function flushActiveChapterStream"),
   /p\.activeChapterId !== ch\.id/
 );
-const streamPaintFn = srcBetween(app, "function paintActiveChapterStream(", "async function writeTask");
+const streamPaintFn = srcBetween(app, "function paintActiveChapterStream(", "function addWritingFileHints");
 assert.match(streamPaintFn, /requestAnimationFrame/);
 assert.doesNotMatch(
   streamPaintFn,
@@ -616,7 +809,8 @@ assert.ok(
 assert.match(app, /markDirty: \(\) => markDirty\(\)/);
 
 const openConflictFn = srcBetween(app, "function openNextSaveConflict()", "async function reconcileSaveWarnings");
-assert.match(openConflictFn, /pickLocalChapterForConflictDisplay/);
+assert.match(openConflictFn, /SaveConflicts\.activateNext\(\)/);
+assert.match(conflictUseCases, /deps\.pickLocalChapter\?\.\(queued, live, diskChapter\)/);
 assert.doesNotMatch(openConflictFn, /entry\.localChapter = localChapter/);
 
 const reloadBtnFn = srcBetween(app, '$("btnReloadDisk")', '$("btnMigrate")');
@@ -633,19 +827,19 @@ assert.match(focusFn, /diskAdoptFlags/);
 assert.match(focusFn, /clearRecovery|enqueueChapterConflictsIfDiverged/);
 
 const flushProjectFn = srcBetween(app, "async function flushProject(p)", "async function prepareVaultSwitch");
-assert.match(flushProjectFn, /await diskSavePromise/);
-assert.match(flushProjectFn, /return flushProject\(p\)/);
-assert.match(flushProjectFn, /diskSavePromise = saveRun/);
-assert.match(flushProjectFn, /Vault\.saveBook\(p\.slug, p\)/);
+assert.match(flushProjectFn, /return Persistence\.flushProject\(p\)/);
+assert.match(persistenceUseCases, /async function serialized\(operation\)/);
+assert.match(persistenceUseCases, /if \(inFlight\)[\s\S]*?await inFlight/);
+assert.match(persistenceUseCases, /deps\.saveBook\(project\.slug, project\)/);
 
-const flushSyncFn = srcBetween(app, "window.__mogaoFlushSync", "function filterMigrateProjects");
+const flushSyncFn = srcBetween(app, "window.__mogaoFlushSync", "const filterMigrateProjects");
 assert.match(flushSyncFn, /Vault\.adoptChapterBaselines\?\.\(p, saveResult, warnings\)/);
-assert.match(flushSyncFn, /diskSavePromise/);
+assert.match(flushSyncFn, /Persistence\.isSaving\(\)/);
 
 assert.equal(
   (app.match(/await Vault\.saveBook\(/g) || []).length,
-  2,
-  "only flushToDisk and flushProject may PUT the book"
+  0,
+  "async whole-book PUTs belong to persistence-use-cases, not the controller"
 );
 assert.match(app, /btnImportSeed[\s\S]*?await flushProject\(seed\)/);
 assert.match(app, /btnExport[\s\S]*?await flushToDisk\(\)/);

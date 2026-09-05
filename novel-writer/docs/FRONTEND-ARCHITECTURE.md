@@ -5,8 +5,15 @@
 | 模块 | 单一职责 | 不应承担 |
 |---|---|---|
 | `api.js` | OpenAI-compatible 请求、SSE、重试、输出限长 | 小说状态与 DOM |
-| `context.js` / `rag.js` | 上下文装配、预算、检索 | 保存、弹窗与导航 |
-| `pipeline.js` / `harness.js` | 写章与章后闭环 | 页面布局 |
+| `context.js` / `rag.js` | 上下文门面与检索 | 保存、弹窗与导航 |
+| `context-evidence.js` / `context-budget.js` / `memory-reducers.js` | 证据筛选、预算分配、记忆归并 | DOM、网络与存储 |
+| `pipeline.js` | 策划、生成、交接服务的稳定薄门面 | 具体算法、页面布局 |
+| `planning-service.js` / `handoff-service.js` / `legacy-generation-adapter.js` | 策划、章后交接、旧 Harness 兼容 | DOM 与页面状态 |
+| `chapter-drafting-service.js` / `production-quality.js` | 原子整章起草、确定性质量信号与放行规则 | DOM、网络实现、存储与隐式全局阈值 |
+| `write-use-cases.js` | 生成、续写、改写、交接、修复的取消与事务顺序 | DOM、网络实现与存储实现 |
+| `persistence-use-cases.js` | 保存队列、表单同步、工作区正文归并、导出模型 | DOM、XHR 与 localStorage |
+| `conflict-use-cases.js` | 冲突队列、恢复、裁决与重载协调 | DOM、XHR 与 localStorage |
+| `harness.js` | 旧写章闭环的兼容实现 | 页面布局 |
 | `vault.js` / `store.js` | 磁盘协议、恢复缓存、纯合并 | 具体视图渲染 |
 | `workspace.js` | 资料文件树、编辑/预览、窄窗抽屉 | 写章状态机 |
 | `ui-shell.js` | UI 状态迁移与纯展示分类器 | 网络或持久化 |
@@ -15,11 +22,17 @@
 | `graph-panel.js` | 关系图取数：子图收缩、章节排序、关系表 | DOM 与选中态存储 |
 | `story-records.js` | Canon / 伏笔 / 连续性的筛选、排序、统计 | DOM 与存盘 |
 | `composer-review.js` | 生成结果快照与撤销闸 | DOM 与存盘 |
-| `write-ui.js` | 细纲编辑器渲染/收集 | 写章网络与存盘 |
+| `write-ui.js` | 写章欢迎页、章节列表、页头、质量与检查器的 Presentation Model | 写章网络与存盘 |
 | `craft.js` | 细纲、开场轮换、套话检查、交接闸 | 网络请求与 DOM |
-| `app.js` | 模块编排、跨域事务、主视图渲染 | 新增可独立测试的算法 |
+| `quality-release-policy.js` | 默认引擎决策的 fail-closed 纯策略 | 读取报告文件、网络、DOM 或自行声明通过 |
+| `composition-contract.js` | 47 个 classic scripts 的 providers/requires/deferred/external 合同与启动前校验 | 业务状态、网络或 DOM 渲染 |
+| `app.js` | 模块装配、DOM ports、跨域事务入口 | 新增可独立测试的算法或状态队列 |
 
-新增逻辑时，能写成纯函数的内容应进入对应模块并由 `tests/*.mjs` 直接验证；只有跨模块事务留在 `app.js`。`tests/test_frontend_contract.mjs` 会断言 `story-records.js` / `graph-panel.js` / `composer-review.js` 不含任何 DOM 调用，也会拦住把这些算法抄回 `app.js`。所有正式 UI 资产必须登记在 `../mogao-tauri/ui-files.txt`，再由 `scripts/sync-ui.ps1` 同步，禁止直接修改 `release/ui` 或 `src-tauri/ui-embed`。
+新增逻辑时，能写成纯函数的内容应进入对应模块并由 `tests/*.mjs` 直接验证；只有跨模块事务留在 `app.js`。`tests/test_frontend_contract.mjs` 会断言 `story-records.js` / `graph-panel.js` / `composer-review.js` 不含任何 DOM 调用，也会拦住把这些算法抄回 `app.js`。`tests/test_composition_contract.mjs` 从源码提取所有 `window.NOVEL_*` provider/reference，要求每个引用显式分类，拒绝重复 provider、eager 逆序、未知依赖与 `index.html` 漂移；`app.js` 在 boot 前后各执行一次运行时断言。所有正式 UI 资产必须登记在 `../mogao-tauri/ui-files.txt`，再由 `scripts/sync-ui.ps1` 同步，禁止直接修改 `release/ui` 或 `src-tauri/ui-embed`。
+
+覆盖率门不把适配器或展示模型当作分母填充。`scripts/domain-coverage.ps1` 显式列出状态、生产质量、质量发布策略、上下文预算、记忆归并和文本计量组成的纯领域内核，执行全部 Node 行为测试后要求聚合 statements ≥80%、branches ≥75%；Phase 8 基线为 statements 96.66%、branches 79.56%，其中质量发布策略为 100%/98.14%。其余 DOM-free 应用用例继续由全量行为测试和架构边界测试约束。
+
+应用用例以 `create(deps)` 装配，依赖只能通过 ports 注入。用例模块不得直接引用 `document`/`window`、`fetch`/XHR 或 localStorage；`app.js` 负责把当前闭包状态、Vault、Store、Pipeline 和 DOM 渲染器适配为窄端口。写作运行的锁不是布尔值的无主开关，而是绑定 `runToken` 的租约：被后继运行 abort 的旧用例即使晚到 `finally`，也无权解开后继运行仍持有的锁。
 
 编辑器热路径的两条约定，同样由契约测试锁住：
 

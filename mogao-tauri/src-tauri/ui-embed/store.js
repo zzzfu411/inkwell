@@ -13,6 +13,8 @@ window.NOVEL_STORE = (() => {
 
   function defaultProject() {
     return {
+      schemaVersion: window.NOVEL_PROJECT_MIGRATIONS?.CURRENT_SCHEMA_VERSION || 1,
+      schemaMigrationHistory: [],
       id: uid(),
       slug: "",
       title: "新自动连载",
@@ -64,6 +66,8 @@ window.NOVEL_STORE = (() => {
         forbiddenPhrases: [],
         examples: [],
       },
+      /** 从已接受章节统计出的可解释风格轮廓（软约束；没有样本时为空） */
+      styleProfile: null,
       /**
        * 滚动故事状态：每章 digest 后由 context.mergeStoryState 更新。
        * 写下一章时注入【当前故事状态】，避免模型遗忘进度/设定。
@@ -112,7 +116,21 @@ window.NOVEL_STORE = (() => {
       const raw = localStorage.getItem(KEY);
       if (raw) {
         const s = JSON.parse(raw);
-        if (s.projects?.length) return s;
+        if (s.projects?.length) {
+          // slim 缓存里的空 body 会被状态模块跳过；未落盘/旧缓存的完整正文
+          // 则可在应用启动前立即发现过期质量签名。
+          for (const project of s.projects) {
+            const migration = window.NOVEL_PROJECT_MIGRATIONS?.migrateProject?.(project, {
+              reason: "浏览器缓存恢复",
+            });
+            if (!migration?.readOnly) {
+              window.NOVEL_PRODUCTION_STATE?.reconcileProject?.(project, {
+                reason: "浏览器恢复正文与旧质量签名不一致",
+              });
+            }
+          }
+          return s;
+        }
       }
     } catch (_) {}
     const p = defaultProject();
@@ -146,7 +164,7 @@ window.NOVEL_STORE = (() => {
         if (!ch || typeof ch !== "object") return ch;
         const { body, ...meta } = ch;
         // 保留 id/title/order/updatedAt 等 meta；body 置空
-        return { ...meta, body: "" };
+        return { ...meta, body: "", _bodyLoaded: false };
       });
     }
     return copy;

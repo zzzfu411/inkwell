@@ -32,11 +32,11 @@ inkwell/
 
 ## 开发
 
-需要：Rust stable、Node.js、Windows WebView2。
+需要：Rust stable、Node.js 24、Python 3、Windows WebView2。
 
 ```bat
 cd mogao-tauri
-npm install
+npm ci
 npm run tauri dev
 ```
 
@@ -47,7 +47,7 @@ cd novel-writer
 python server.py
 ```
 
-`server.py` **不是** 生产后端：无会话 token，写盘语义可能落后于 Tauri。
+`server.py` 是调试后端，核心读写遵守共享 HTTP 契约 v2；正式运行使用 Rust/Tauri 的会话鉴权与凭据存储。
 
 ## 发布
 
@@ -64,12 +64,15 @@ build-release.bat
 powershell -File mogao-tauri\scripts\ci.ps1
 ```
 
+根目录的 GitHub Actions 使用同一个提交检出两个子目录，不需要兄弟仓库 token 或配对 SHA 变量。完整 CI 包括 Rust、Node、Python、共享后端契约、真实浏览器流程、性能预算及视觉回归。工作区开发候选可使用 `mogao-tauri/scripts/build-release.ps1 -AllowDirty -Candidate`，输出到独立的 `output/candidate-release/`。
+
 ## 文档
 
 - [使用说明](mogao-tauri/使用说明.md)
 - [前端架构](novel-writer/docs/FRONTEND-ARCHITECTURE.md)
 - [RAG / Harness](novel-writer/docs/RAG-HARNESS.md)
 - [变更记录](novel-writer/CHANGELOG.md)
+- [2026-09 成熟化修复与验收](docs/MATURITY-2026-09.md)
 
 ## 许可
 

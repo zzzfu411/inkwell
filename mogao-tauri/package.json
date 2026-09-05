@@ -7,12 +7,24 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
+    "lint": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/lint.ps1",
+    "test:coverage": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/domain-coverage.ps1",
+    "test:quality": "node ../novel-writer/scripts/quality-ab.mjs fixture --out output/quality-fixture --force",
+    "verify:quality-release": "node ../novel-writer/scripts/verify-quality-release.mjs",
+    "test:performance": "node ../novel-writer/scripts/performance-budget.mjs --out output/performance/report.json",
+    "verify:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-release.ps1",
+    "test:contract": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/backend-contract.ps1",
+    "test:rust-e2e": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/rust-backend-e2e.ps1",
     "test:browser": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/browser-layout-smoke.ps1",
     "test:visual": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/visual-regression.ps1",
     "test:visual:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/visual-regression.ps1 -UpdateSnapshots"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "c8": "12.0.0",
+    "eslint": "10.9.1",
+    "globals": "17.12.0"
   }
 }

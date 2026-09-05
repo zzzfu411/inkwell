@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "id": "future-book",
+  "slug": "future-book",
+  "title": "未来格式作品",
+  "futureOnlyField": {
+    "mustRemainUntouched": true
+  },
+  "tasks": [],
+  "chapters": []
+}

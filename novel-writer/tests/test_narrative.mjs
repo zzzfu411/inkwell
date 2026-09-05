@@ -1,5 +1,5 @@
 /**
- * GOAL-ULTIMATE Phase1：叙事核心库冒烟测试。
+ * 叙事核心库冒烟测试。
  * 覆盖：章节检测、图谱合并、occurrence 过滤、人物 degree。
  */
 import assert from "node:assert/strict";
@@ -14,7 +14,7 @@ const root = path.join(__dirname, "..");
 
 function loadScript(name, sandbox) {
   const code = fs.readFileSync(path.join(root, name), "utf8");
-  vm.runInNewContext(code, sandbox);
+  vm.runInNewContext(code, sandbox, { filename: path.join(root, name) });
 }
 
 const sandbox = {
@@ -340,6 +340,9 @@ test("A3 context.mergeGraph delegates chapter-aware", () => {
     },
     console,
   };
+  loadScript("memory-reducers.js", sb);
+  loadScript("context-budget.js", sb);
+  loadScript("context-evidence.js", sb);
   loadScript("context.js", sb);
   const C = sb.window.NOVEL_CONTEXT;
   const base = {

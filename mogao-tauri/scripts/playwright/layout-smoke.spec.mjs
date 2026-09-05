@@ -200,6 +200,35 @@ test("narrow workspace uses an accessible file drawer", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("settings toggles align and narrow workspace actions have unobstructed hit targets", async ({ page }) => {
+  for (const width of [640, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect.poll(() => page.evaluate(() => window.__mogaoReady === true)).toBe(true);
+    await activate(page, "workspace");
+    const overlap = await page.evaluate(() => {
+      const rect = (selector) => document.querySelector(selector).getBoundingClientRect();
+      const hits = (a, b) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+      const toolbar = rect(".ws-toolbar");
+      return ["#btnSettings", ".book-drawer-trigger"].map((selector) => hits(toolbar, rect(selector)));
+    });
+    expect(overlap).toEqual([0, 0]);
+    await page.locator("#btnSettings").click();
+    await page.locator("#settings-tab-writing").click();
+    const toggle = page.locator("#cfgHarness");
+    await toggle.scrollIntoViewIfNeeded();
+    const aligned = await toggle.evaluate((checkbox) => {
+      const box = checkbox.getBoundingClientRect();
+      const label = checkbox.closest("label").querySelector("span").getBoundingClientRect();
+      return { separated: box.left >= label.right, height: box.height, hit: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === checkbox };
+    });
+    expect(aligned.separated).toBe(true);
+    expect(aligned.height).toBeGreaterThanOrEqual(20);
+    expect(aligned.hit).toBe(true);
+    await closeSettings(page);
+  }
+});
+
 test("modal keyboard focus is contained and restored", async ({ page }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   const trigger = page.locator("#btnSettings");
@@ -1035,7 +1064,8 @@ async function overwriteChapterOnDisk(page, chapterId, body) {
       if (!ch?._file) throw new Error("chapter has no _file after fixture save");
       const title = String(ch.title || "章").replace(/"/g, "");
       const md = `---\nid: "${ch.id}"\ntaskId: "${ch.taskId || ""}"\ntitle: "${title}"\norder: ${Number(ch.order) || 1}\nupdatedAt: ${Date.now()}\n---\n\n${body}\n`;
-      await window.NOVEL_VAULT.writeFile(slug, ch._file, md);
+      const file = await window.NOVEL_VAULT.readFile(slug, ch._file);
+      await window.NOVEL_VAULT.writeFile(slug, ch._file, md, file.revision);
       return { slug, file: ch._file };
     },
     { chapterId, body }
@@ -2436,14 +2466,17 @@ test("analysis marks the book dirty before persisting the new graph", async ({ p
       meta: { status: "done" },
     });
     const vault = window.NOVEL_VAULT;
-    const writeFile = vault.writeFile.bind(vault);
-    vault.writeFile = async (slug, pathName, body) => {
-      if (String(pathName).replace(/\\/g, "/").includes("graph.json")) {
-        await new Promise((resolve) => {
-          window.__releaseHang = resolve;
-        });
-      }
-      return writeFile(slug, pathName, body);
+    const createWriter = vault.createFileWriter.bind(vault);
+    vault.createFileWriter = async (...args) => {
+      const writer = await createWriter(...args);
+      const write = writer.write.bind(writer);
+      writer.write = async (pathName, body) => {
+        if (String(pathName).replace(/\\/g, "/").includes("graph.json")) {
+          await new Promise((resolve) => { window.__releaseHang = resolve; });
+        }
+        return write(pathName, body);
+      };
+      return writer;
     };
   });
   await page.locator("#btnAnLoadChapters").click();
@@ -2540,5 +2573,3 @@ test("abort flushes partial stream into the editor even when rAF never runs", as
   await expect(page.locator("#statusChip")).toHaveText("已停止");
   await expectManuscriptText(page.locator("#manuscript"), marker.repeat(tokens));
 });
-
-

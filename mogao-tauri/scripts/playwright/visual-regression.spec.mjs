@@ -5,6 +5,8 @@ const cases = [
   { name: "write-1440", width: 1440, height: 900, scenario: "write" },
   { name: "settings-1024", width: 1024, height: 768, scenario: "settings" },
   { name: "settings-1440", width: 1440, height: 900, scenario: "settings" },
+  { name: "settings-writing-1024", width: 1024, height: 768, scenario: "settings-writing" },
+  { name: "settings-writing-640", width: 640, height: 800, scenario: "settings-writing" },
   { name: "story-1440", width: 1440, height: 900, scenario: "story" },
   { name: "conflict-1024", width: 1024, height: 768, scenario: "conflict" },
   { name: "workspace-640", width: 640, height: 800, scenario: "workspace" },
@@ -26,6 +28,8 @@ async function pinVisualVaultPath(page) {
     }
     const label = document.getElementById("vaultPathLabel");
     if (label) label.title = path;
+    const fileMeta = document.getElementById("wsFileMeta");
+    if (fileMeta?.textContent) fileMeta.textContent = fileMeta.textContent.replace(/\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}:\d{2}/, "2026/9/5 12:00:00");
     const meta = document.getElementById("cfgEngineMeta");
     if (meta) {
       const books = `${path}\\books`;
@@ -36,10 +40,11 @@ async function pinVisualVaultPath(page) {
 
 async function activate(page, scenario) {
   await page.keyboard.press("Escape");
-  if (scenario === "settings") {
+  if (scenario.startsWith("settings")) {
     await page.locator("#btnSettings").click();
     await expect(page.locator("#settingsModal")).toBeVisible();
     await expect(page.locator("#cfgEngineMeta")).not.toContainText("加载中");
+    if (scenario === "settings-writing") await page.locator("#settings-tab-writing").click();
     return;
   }
   if (scenario === "workspace") {
@@ -73,10 +78,10 @@ async function activate(page, scenario) {
   await page.evaluate(() => {
     document.body.classList.remove("focus-mode");
     const issue = document.getElementById("ribbonIssues");
-    issue.textContent = "安全";
+    issue.textContent = "未审查";
     issue.closest("button")?.removeAttribute("data-tone");
     document.getElementById("continuityCount").textContent = "0";
-    document.getElementById("continuityInspector").innerHTML = '<div class="empty-state compact success-state"><span class="empty-kicker">连续性稳定</span><strong>当前没有待处理风险。</strong></div>';
+    document.getElementById("continuityInspector").innerHTML = '<div class="empty-state compact"><span class="empty-kicker">未审查</span><strong>本章尚未完成连续性审查。</strong></div>';
     const status = document.getElementById("statusChip");
     status.textContent = "就绪";
     status.className = "chip muted";
@@ -171,6 +176,12 @@ async function activate(page, scenario) {
 test("approved editorial surfaces remain visually stable", async ({ page }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__mogaoReady === true)).toBe(true);
+  await page.evaluate(async () => {
+    const state = window.NOVEL_STORE.loadAll();
+    const book = state.projects.find((item) => item.id === state.activeId) || state.projects[0];
+    const readme = await window.NOVEL_VAULT.readFile(book.slug, "README.md");
+    await window.NOVEL_VAULT.writeFile(book.slug, "README.md", "# 新书\n\n墨稿视觉测试作品。\n\n创建时间：2026-09-05\n", readme.revision);
+  });
   await page.addStyleTag({
     content: [
       "*,*::before,*::after{animation:none!important;animation-play-state:paused!important;transition:none!important;caret-color:transparent!important}",

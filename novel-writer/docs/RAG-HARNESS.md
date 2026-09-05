@@ -13,8 +13,9 @@
 | Style memory | 叙述规则与人物声线 | `styleBible` |
 | Hybrid RAG | BM25/词法 + 可选 dense + 元数据 | `rag.js` |
 | Query 分解 | 多查询 / 实体 / 钩子 | `buildQueriesFromTask` |
-| Agent Harness | Plan→Retrieve→Generate→Update | `harness.js` |
-| Quality gate | 写后审查与有限局部修订 | continuity review / repair |
+| Agent Harness | Plan→Retrieve→Generate→Update | `harness.js`（旧兼容层） |
+| Narrative production | 章节契约→分场生成→语义批评→救稿→验收 | `production-engine.js` |
+| Quality gate | 写后审查与有限局部修订 | production critic + continuity review |
 | Write-back | 生成后更新记忆再索引 | digest handoff + reindex |
 
 参考方向（概念层，非强制依赖）：GraphRAG/社区摘要、RAPTOR 树摘要、Corrective/Adaptive RAG、MemGPT 式分层记忆、LangGraph 显式流水线。
@@ -24,17 +25,20 @@
 - **不引入** Pinecone/LangChain 等重依赖；跑在浏览器 + Tauri。
 - **默认 BM25 混合检索**（零额外 API）；可选 `ragUseEmbeddings` 走反代 `/v1/embeddings`。
 - embeddings 模式使用宽候选池：词法命中 + Canon/状态/钩子/时间线 + 相邻正文，而不是只重排 Top-8。
-- 自动修订只接受正文中唯一命中的局部替换，最多一轮并复检；不会自动全文重写。
+- 旧 Harness 的连续性修订仍只接受正文中唯一命中的局部替换；新版生产流在质量闸门拒绝时允许有界整章救稿，并保留原稿快照。
 
 ## 写章数据流
 
 ```
-任务卡
-  → Harness.retrieve（多查询 BM25 ± embed）
-  → packForWrite（故事线 + canon + RAG hits + 上章文末 + 任务）
-  → LLM 写正文（gemini-3.6-flash）
-  → 连续性审查（可选局部修订 + 一次复检）
-  → 章后交接 JSON → memoryRoll / detailCanon / plotLoops / entityStates / timeline / storyline
+任务卡 + 上章余波
+  → production-engine 编译 Chapter Contract
+  → Evidence Pack（locked / continuity / state / reference 分层）
+  → Scene Contract × N
+  → 每场 LLM 生成 + 检查点
+  → Semantic Critic（因果/主动性/场面/POV/张力/钩子）
+  → 最多 N 次整章救稿 + 本地可复现指标复检
+  → Quality Gate（strict 不合格停在 needs_revision）
+  → continuity review + 章后交接 JSON → memoryRoll / detailCanon / plotLoops / entityStates / timeline / storyline
   → 关系增量
   → RAG reindex
 ```
@@ -44,6 +48,9 @@
 | 项 | 默认 | 含义 |
 |----|------|------|
 | harnessEnabled | true | 走完整流水线 |
+| productionEngineEnabled | true | 启用新版分场叙事生产编排器 |
+| productionQualityPolicy | strict | 质量不达标时停在 `needs_revision`；`warn` 仅用于低额度/旧书回退 |
+| productionMaxRevisionPasses | 1 | 质量闸门前最多自动整章救稿次数 |
 | ragEnabled | true | 本地检索 |
 | ragUseEmbeddings | false | 向量重排 |
 | ragTopK | 8 | 命中条数 |
@@ -76,6 +83,6 @@ node scripts/eval-continuity.mjs --compare baseline.json current.json
 
 ## 文件
 
-- `rag.js` / `harness.js`
+- `rag.js` / `harness.js` / `production-engine.js`
 - 落盘：`记忆/rag-index.json` 等
 - 测试：`tests/test_rag_harness.mjs`

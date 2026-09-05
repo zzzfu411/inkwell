@@ -37,6 +37,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
+from storage_versions import StorageConflict, check_revision, content_revision, metadata_revision
 
 VERSION = "0.19.0"
 PORT = int(os.environ.get("MOGAO_PORT", "8765"))
@@ -76,12 +77,26 @@ SETTINGS_LOCK = threading.Lock()
 LIBRARY_LOCK = threading.RLock()
 _BOOK_LOCKS_GUARD = threading.Lock()
 _BOOK_LOCKS: dict[str, threading.RLock] = {}
+_CONTENT_EPOCH_LOCK = threading.Lock()
+_CONTENT_EPOCH = 0
 
 INVALID_FS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 class RequestBodyTooLarge(ValueError):
     pass
+
+
+def content_epoch() -> int:
+    with _CONTENT_EPOCH_LOCK:
+        return _CONTENT_EPOCH
+
+
+def bump_content_epoch() -> int:
+    global _CONTENT_EPOCH
+    with _CONTENT_EPOCH_LOCK:
+        _CONTENT_EPOCH += 1
+        return _CONTENT_EPOCH
 
 
 def parse_content_length(value: str | None) -> int:
@@ -375,6 +390,8 @@ def load_chapter_path(path: Path, fallback_order: int, base: dict | None = None)
             "updatedAt": coerce_int(meta.get("updatedAt"), 0) or chapter.get("updatedAt") or now_ms(),
             "_file": f"章节/{path.name}",
             "_fileMtime": int(path.stat().st_mtime * 1000),
+            "_fileRevision": content_revision(path.read_bytes().decode("utf-8")),
+            "_bodyLoaded": True,
         }
     )
     return chapter
@@ -433,7 +450,7 @@ def chapter_baselines(project: dict) -> list[dict]:
         mtime = ch.get("_fileMtime")
         if not rel or not mtime:
             continue
-        rows.append({"id": ch.get("id"), "order": ch.get("order"), "file": rel, "mtime": mtime})
+        rows.append({"id": ch.get("id"), "order": ch.get("order"), "file": rel, "mtime": mtime, "revision": ch.get("_fileRevision")})
     return rows
 
 
@@ -442,6 +459,8 @@ def chapter_baselines(project: dict) -> list[dict]:
 def default_book(title: str = "新书", idea: str = "") -> dict:
     bid = str(uuid.uuid4())
     return {
+        "schemaVersion": 1,
+        "schemaMigrationHistory": [],
         "id": bid,
         "slug": "",
         "title": title or "新书",
@@ -662,9 +681,11 @@ def book_meta(slug: str) -> dict:
 
 
 @book_io_locked
-def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dict:
+def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True, checked: bool = False) -> dict:
     """安全落盘：可选快照 → 先写新章节文件 → 再删孤儿 → 镜像 → book.json。"""
     bdir = book_dir(slug)
+    if checked:
+        check_revision(project.get("_bookRevision"), metadata_revision(bdir), True)
     bdir.mkdir(parents=True, exist_ok=True)
     for sub in ("章节", "策划", "关系", "记忆", "锁定"):
         (bdir / sub).mkdir(exist_ok=True)
@@ -677,7 +698,7 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
 
     has_chapters_key = "chapters" in project
     clear_chapters = bool(project.get("clearChapters") or project.get("_clearChapters"))
-    force_chapter_overwrite = bool(project.get("_forceChapterOverwrite"))
+    force_chapter_overwrite = not checked and bool(project.get("_forceChapterOverwrite"))
     project = dict(project)
     project["slug"] = slug
     project["updatedAt"] = now_ms()
@@ -692,6 +713,7 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
     project.pop("_clearChapters", None)
     project.pop("_forceChapterOverwrite", None)
     project.pop("_saveWarnings", None)
+    project.pop("_bookRevision", None)
 
     task_order = chapter_order_map(project)
     chap_dir = bdir / "章节"
@@ -744,7 +766,7 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
             disk_meta, disk_body = parse_chapter_md(source_path.read_text(encoding="utf-8"))
             incoming_body = str(ch.get("body") or "")
             # slim 缓存会把已落盘章的 body 置成空串；禁止用空串原子盖掉磁盘正文。
-            if not incoming_body.strip() and disk_body.strip():
+            if (ch.get("_bodyLoaded") is not True or not isinstance(ch.get("body"), str)) and not incoming_body.strip() and disk_body.strip():
                 disk_ch = load_chapter_path(source_path, order, base=ch)
                 keep_names.add(source_path.name)
                 saved_chapters.append(disk_ch)
@@ -764,6 +786,10 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
                 if baseline > 0
                 else disk_mtime > incoming_updated + 500
             )
+            if ch.get("_fileRevision"):
+                disk_changed = ch["_fileRevision"] != content_revision(source_path.read_bytes().decode("utf-8"))
+            elif checked:
+                disk_changed = True
             if content_diff and disk_changed:
                 disk_ch = load_chapter_path(source_path, order, base=ch)
                 keep_names.add(source_path.name)
@@ -788,6 +814,8 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
             if old_path.is_file():
                 old_path.unlink()
         ch["_fileMtime"] = int(target_path.stat().st_mtime * 1000)
+        ch["_fileRevision"] = content_revision(target_path.read_bytes().decode("utf-8"))
+        ch["_bodyLoaded"] = True
         saved_chapters.append(ch)
 
     if has_chapters_key and (incoming or clear_chapters):
@@ -882,8 +910,10 @@ def save_book_to_disk(slug: str, project: dict, do_snapshot: bool = True) -> dic
     write_json(bdir / "锁定" / "locks.json", project.get("locks") or {})
 
     write_json(bdir / "book.json", project)
+    project["_bookRevision"] = metadata_revision(bdir)
     write_book_readme(bdir, project)
     touch_library_entry(slug, project)
+    bump_content_epoch()
     log(f"saved {slug} chapters={len(chapters)}")
     if save_warnings:
         project["_saveWarnings"] = save_warnings
@@ -921,6 +951,8 @@ def load_chapters_from_md(bdir: Path, project: dict) -> list[dict]:
         ch["updatedAt"] = try_int(meta.get("updatedAt")) or ch.get("updatedAt") or now_ms()
         ch["_file"] = f"章节/{path.name}"
         ch["_fileMtime"] = int(path.stat().st_mtime * 1000)
+        ch["_fileRevision"] = content_revision(path.read_bytes().decode("utf-8"))
+        ch["_bodyLoaded"] = True
         loaded.append(ch)
 
     # 保留 md 里没有、但 book.json 有的空章？以 md 为准更像 Obsidian
@@ -984,6 +1016,7 @@ def load_book_from_disk(slug: str) -> dict:
     project["_path"] = str(bdir)
     bj = bdir / "book.json"
     project["_mtime"] = int(bj.stat().st_mtime * 1000) if bj.exists() else 0
+    project["_bookRevision"] = metadata_revision(bdir)
     return project
 
 
@@ -1165,7 +1198,7 @@ def create_book(title: str, idea: str = "") -> dict:
     project["pipelineLog"] = [{"t": now_ms(), "msg": f"创建本地书夹 vault/books/{slug}"}]
     try:
         save_book_to_disk(slug, project)
-        return project
+        return load_book_from_disk(slug)
     except Exception:
         with book_io_lock(slug):
             shutil.rmtree(book_dir(slug), ignore_errors=True)
@@ -1182,6 +1215,7 @@ def delete_book(slug: str) -> None:
     lib["books"] = [b for b in (lib.get("books") or []) if b.get("slug") != slug]
     lib["updatedAt"] = now_ms()
     write_json(LIBRARY_FILE, lib)
+    bump_content_epoch()
 
 
 def migrate_projects(projects: list[dict]) -> list[dict]:
@@ -1371,14 +1405,17 @@ def read_book_file(slug: str, rel: str) -> dict:
         "name": target.name,
         "ext": suf,
         "content": text,
+        "revision": content_revision(target.read_bytes().decode("utf-8")),
         "mtime": int(st.st_mtime * 1000),
         "size": st.st_size,
     }
 
 
 @book_io_locked
-def write_book_file(slug: str, rel: str, content: str) -> dict:
+def write_book_file(slug: str, rel: str, content: str, expected_revision=None, checked=False) -> dict:
     target = safe_rel_under_book(slug, rel)
+    actual = content_revision(target.read_bytes().decode("utf-8")) if target.is_file() else "missing"
+    check_revision(expected_revision, actual, checked, "FILE")
     suf = target.suffix.lower()
     if suf not in EDITABLE_SUFFIX:
         raise ValueError(f"not editable: {suf}")
@@ -1395,12 +1432,14 @@ def write_book_file(slug: str, rel: str, content: str) -> dict:
             _sync_mirror_file(slug, rel_n, content or "")
     except Exception as e:
         log(f"mirror sync skip: {e}")
+    bump_content_epoch()
     return {
         "ok": True,
         "slug": slug,
         "path": rel_n,
         "mtime": int(st.st_mtime * 1000),
         "size": st.st_size,
+        "revision": content_revision(target.read_bytes().decode("utf-8")),
     }
 
 
@@ -1432,6 +1471,7 @@ def delete_book_path(slug: str, rel: str) -> dict:
         project["updatedAt"] = now_ms()
         write_json(bdir / "book.json", project)
         touch_library_entry(slug, project)
+    bump_content_epoch()
     return {"ok": True, "slug": slug, "path": rel_n, "deleted": True}
 
 
@@ -1720,7 +1760,13 @@ def tree_mtimes(slug: str) -> dict:
             out[rel] = int(p.stat().st_mtime * 1000)
         except OSError:
             pass
-    return {"slug": slug, "files": out, "scannedAt": now_ms()}
+    return {
+        "slug": slug,
+        "files": out,
+        "scannedAt": now_ms(),
+        "pollHintMs": 800,
+        "epoch": content_epoch(),
+    }
 
 
 def reveal_path(path: str) -> None:
@@ -1828,8 +1874,26 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _error(self, status: int, message: str) -> None:
-        self._send(status, {"error": {"message": message, "status": status}})
+    def _error(self, status: int, message: str, code: str | None = None) -> None:
+        default_codes = {
+            400: "INVALID_REQUEST",
+            401: "UNAUTHORIZED",
+            403: "FORBIDDEN",
+            404: "NOT_FOUND",
+            409: "CONFLICT",
+            413: "PAYLOAD_TOO_LARGE",
+        }
+        self._send(
+            status,
+            {
+                "ok": False,
+                "error": {
+                    "code": code or default_codes.get(status, "INTERNAL_ERROR"),
+                    "message": message,
+                    "status": status,
+                },
+            },
+        )
 
     def _allow_local_origin(self) -> bool:
         origin = self.headers.get("Origin")
@@ -1910,6 +1974,9 @@ class Handler(SimpleHTTPRequestHandler):
                         "books": str(BOOKS),
                         "port": PORT,
                         "historyKeep": HISTORY_KEEP,
+                        "engine": "python-debug",
+                        "epoch": content_epoch(),
+                        "auth": "debug-origin",
                     },
                 )
             if path == "/api/settings":
@@ -1961,7 +2028,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path == "/api/books":
                 title = (body.get("title") or "新书").strip()
                 idea = (body.get("idea") or "").strip()
-                return self._send(201, create_book(title, idea))
+                return self._send(200, create_book(title, idea))
             if path == "/api/migrate":
                 projects = body.get("projects") or []
                 result = migrate_projects(projects)
@@ -2032,7 +2099,7 @@ class Handler(SimpleHTTPRequestHandler):
                 content = body.get("content")
                 if content is None:
                     return self._error(400, "content required")
-                return self._send(200, write_book_file(m.group(1), rel, str(content)))
+                return self._send(200, write_book_file(m.group(1), rel, str(content), body.get("expectedRevision"), True))
             m = re.fullmatch(r"/api/books/([^/]+)", path)
             if not m:
                 return self._error(404, f"unknown PUT {path}")
@@ -2042,7 +2109,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._error(400, "body must be object")
             # 允许改名 title，但 slug 以路径为准
             with book_io_lock(slug):
-                saved = save_book_to_disk(slug, body)
+                saved = save_book_to_disk(slug, body, checked=True)
                 meta = book_meta(slug)
             return self._send(
                 200,
@@ -2055,8 +2122,12 @@ class Handler(SimpleHTTPRequestHandler):
                     "version": VERSION,
                     "saveWarnings": saved.get("_saveWarnings") or [],
                     "chapterBaselines": chapter_baselines(saved),
+                    "bookRevision": saved.get("_bookRevision"),
+                    "epoch": content_epoch(),
                 },
             )
+        except StorageConflict as e:
+            self._error(428 if e.code == "REVISION_REQUIRED" else 409, str(e), e.code)
         except RequestBodyTooLarge as e:
             self._error(413, str(e))
         except ValueError as e:
@@ -2077,7 +2148,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not m:
                 return self._error(404, f"unknown DELETE {path}")
             delete_book(m.group(1))
-            return self._send(200, {"ok": True})
+            return self._send(200, {"ok": True, "epoch": content_epoch()})
         except FileNotFoundError as e:
             self._error(404, f"not found: {e}")
         except ValueError as e:

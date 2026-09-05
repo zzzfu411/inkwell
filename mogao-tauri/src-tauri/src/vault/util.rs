@@ -226,6 +226,8 @@ pub(crate) fn safe_filename(title: &str, order: u64) -> String {
 
 pub(crate) fn default_book(title: &str, idea: &str) -> Value {
     json!({
+        "schemaVersion": 1,
+        "schemaMigrationHistory": [],
         "id": Uuid::new_v4().to_string(),
         "slug": "",
         "title": if title.is_empty() { "新书" } else { title },

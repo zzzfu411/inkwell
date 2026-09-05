@@ -1,5 +1,6 @@
 /* 默认对接 OpenAI 兼容接口。请在设置中填写 Base URL 与 API Key。 */
 window.NOVEL_APP_VERSION = "0.19.0";
+const qualityRelease = window.NOVEL_QUALITY_RELEASE || {};
 window.NOVEL_DEFAULTS = {
   baseUrl: "",
   /* 请在设置中填写 API Key，勿把真实 key 提交进仓库 */
@@ -17,6 +18,23 @@ window.NOVEL_DEFAULTS = {
   outputReserveTokens: 3500,
   /** 启用写章 Harness（Retrieve→Write→Handoff→Reindex） */
   harnessEnabled: true,
+  /**
+   * 候选叙事生产编排器：章节契约 → 整章连贯起草 → 语义批评 → 定向救稿 → 验收。
+   * 默认值只能由固定语料的真实 A/B 发布结论开启；用户仍可手动试用候选引擎。
+   */
+  productionEngineEnabled: qualityRelease.productionDefaultEnabled === true,
+  /** 默认整章连贯起草；scene 仅作为旧书/低上下文模型的兼容回退。 */
+  productionMode: "chapter",
+  /** plan/quality 的失败策略；strict 会阻止低质量正文进入 done */
+  productionPlanPolicy: "strict",
+  productionQualityPolicy: "strict",
+  /** 质量闸门至少允许一次整章救稿；0 表示只审查不自动修订 */
+  productionMaxRevisionPasses: 1,
+  productionMinQualityScore: 7,
+  productionMinSceneCoverage: 0.75,
+  productionMinLengthRatio: 0.55,
+  productionSceneContextChars: 10000,
+  productionCriticBodyChars: 14000,
   /** 普通“续写/生成”完成后也自动写回摘要/设定/索引 */
   manualAutoHandoff: true,
   /** 章后交接前调用独立连续性审查器 */

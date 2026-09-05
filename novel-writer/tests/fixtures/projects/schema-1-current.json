@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "schemaMigrationHistory": [],
+  "id": "current-book",
+  "slug": "current-book",
+  "title": "当前格式作品",
+  "tasks": [
+    { "id": "task-1", "status": "written", "order": 1 }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-1",
+      "taskId": "task-1",
+      "order": 1,
+      "body": "已验收、等待交接的正文",
+      "handoffStatus": "stale",
+      "production": {
+        "schemaVersion": 1,
+        "status": "accepted_pending_handoff",
+        "stage": "accepted",
+        "scenes": [],
+        "errors": [],
+        "contextManifests": []
+      }
+    }
+  ],
+  "pipelineLog": []
+}

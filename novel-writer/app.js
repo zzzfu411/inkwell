@@ -1,6 +1,10 @@
 (() => {
   "use strict";
 
+  const Composition = window.NOVEL_COMPOSITION_CONTRACT;
+  if (!Composition?.assertBeforeEntrypoint) throw new Error("NOVEL_COMPOSITION_CONTRACT 未在 app.js 前加载");
+  Composition.assertBeforeEntrypoint("app.js", window);
+
   const Store = window.NOVEL_STORE;
   const UiShell = window.NOVEL_UI_SHELL;
   const API = window.NOVEL_API;
@@ -11,6 +15,18 @@
   const GraphPanel = window.NOVEL_GRAPH_PANEL;
   const ComposerReview = window.NOVEL_COMPOSER_REVIEW;
   const TextMetrics = window.NOVEL_TEXT_METRICS;
+  const ChapterState = window.NOVEL_CHAPTER_STATE;
+  const ProjectMigrations = window.NOVEL_PROJECT_MIGRATIONS;
+  const ProductionState = window.NOVEL_PRODUCTION_STATE;
+  const ConflictCases = window.NOVEL_CONFLICT_USE_CASES;
+  const PersistenceFactory = window.NOVEL_PERSISTENCE_USE_CASES;
+  const WriteUseCasesFactory = window.NOVEL_WRITE_USE_CASES;
+  const WriteUI = window.NOVEL_WRITE_UI;
+  const DiagnosticsUI = window.NOVEL_DIAGNOSTICS_UI;
+  const {
+    projectFormEqual,
+    formTextEqual,
+  } = PersistenceFactory;
 
   const $ = (id) => document.getElementById(id);
 
@@ -136,28 +152,6 @@
       suppressWritingPositionCapture = false;
       pendingWritingPosition = null;
     });
-  }
-
-  function renderWritingWelcome(p, chapter) {
-    const welcome = $("writingWelcome");
-    const editor = $("manuscript");
-    const composer = document.querySelector("#view-write .compose-bar");
-    const empty = !chapter;
-    if (welcome) welcome.hidden = !empty;
-    if (editor) editor.hidden = empty;
-    if (composer) composer.hidden = empty;
-    document.querySelector("#view-write .stage")?.classList.toggle("is-welcome", empty);
-    if (!empty) return;
-    if ($("writingWelcomeTitle")) {
-      $("writingWelcomeTitle").textContent = p?.slug || p?.title
-        ? `开始《${p.title || "未命名作品"}》的第一章`
-        : "让第一句话落在纸上";
-    }
-    if ($("writingWelcomeHint")) {
-      $("writingWelcomeHint").textContent = p?.tasks?.length
-        ? "故事任务已经就绪。建立章节后，可以按任务写作，也可以完全由你手写。"
-        : "先建立一个章节。之后每次回来，Inkwell 都会把你带回上次停笔的位置。";
-    }
   }
 
   function applyTheme(themeId, persist) {
@@ -372,19 +366,13 @@
   syncResponsiveDrawerAccessibility();
   window.addEventListener("resize", syncResponsiveDrawerAccessibility);
 
-  /** @type {AbortController|null} */
-  let abortCtrl = null;
-  /** 当前 withAbort 持有者；被顶替的先行者不得解锁或清 abortCtrl */
-  let abortRunToken = 0;
   let editingTaskId = null;
-  let autoRunning = false;
   /** 是否连上本地书库服务 */
   let vaultOnline = false;
   let vaultPath = "";
   /** @type {ReturnType<typeof setTimeout>|null} */
   let diskTimer = null;
   /** 当前磁盘保存 Promise；上下文切换必须等待它结束，不能把失败吞掉。 */
-  let diskSavePromise = null;
   let bootDone = false;
   /** 后一次 switchMode 作废仍在 await flush 的前一次，避免延迟切视图盖掉用户已经回到的写章台。 */
   let switchEpoch = 0;
@@ -409,10 +397,6 @@
   let generationHideTimer = null;
   let composerReviewState = null;
   let modalReturnFocus = null;
-  /** 后端已保护的外部章节冲突；必须由作者显式选择后才能继续整本保存。 */
-  let saveConflictQueue = [];
-  let activeSaveConflict = null;
-  const conflictProjectsNeedSave = new Set();
   /** 磁盘 book.json mtime，用于外部修改检测 */
   let diskMtime = 0;
   /** 用户拒绝重载时记录的磁盘 mtime，避免反复弹窗但仍可再次提示若继续变化 */
@@ -428,8 +412,82 @@
   const CLIENT_VERSION = window.NOVEL_APP_VERSION || "0.19.0";
   const Ws = window.NOVEL_WORKSPACE;
 
+  const WritingPresenter = WriteUI.createPresenter({
+    getElementById: $,
+    querySelector: (selector) => document.querySelector(selector),
+    uiShell: UiShell,
+    productionState: ProductionState,
+    textSignature: (text) => Pipe.textSignature(text),
+    getReadOnlyReason: (item) => projectReadOnlyReason(item),
+    hasPendingConflict: (item) => projectHasPendingSaveConflict(item),
+    isVaultOnline: () => vaultOnline,
+    isActiveProject: (item) => project() === item,
+    isDirty: () => dirty,
+    isGenerationLocked: () => genLocked,
+  });
+  const renderWritingWelcome = (...args) => WritingPresenter.renderWritingWelcome(...args);
+  const renderChapterHeaderState = (...args) => WritingPresenter.renderChapterHeaderState(...args);
+  const renderWritingInspector = (...args) => WritingPresenter.renderWritingInspector(...args);
+  const handoffPresentation = (chapter) => WriteUI.handoffPresentation(chapter, ProductionState);
+  const handoffStatusSuffix = (chapter, pendingLabel) =>
+    WriteUI.handoffStatusSuffix(chapter, pendingLabel, ProductionState);
+
   function project() {
     return state.projects.find((p) => p.id === state.activeId) || state.projects[0];
+  }
+
+  /** 后端已保护的外部章节冲突；队列和裁决事务由无 DOM 用例实例统一持有。 */
+  const SaveConflicts = ConflictCases.create({
+    getProjects: () => state.projects,
+    getActiveProject: project,
+    now: Date.now,
+    savePending: (entries) => Store.savePendingConflicts?.(entries),
+    loadPending: () => Store.loadPendingConflicts?.() || [],
+    setStatus: setVaultStatus,
+    saveRecovery: (item) => Store.saveRecovery?.(item),
+    clearRecovery: (item) => Store.clearRecovery?.(item),
+    saveCache: () => Store.saveAll(state),
+    hideConflictModal: hideSaveConflictModal,
+    readRevision: (item) => projectSaveRevisions.read(item),
+    revisionMatches: (item, revision) => projectSaveRevisions.matches(item, revision),
+    chapterBodiesDiverge: (left, right) => Vault.chapterBodiesDiverge?.(left, right),
+    loadDiskSync: loadConflictDiskSync,
+    reconcileSavedBook: (item, fresh, warnings) => Vault.reconcileSavedBook?.(item, fresh, warnings),
+    pickLocalChapter: (queued, live, disk) =>
+      Vault.pickLocalChapterForConflictDisplay?.(queued, live, disk),
+    reloadBook: (slug) => Vault.reloadBook(slug),
+    renderActive: () => {
+      loadWriteView();
+      loadControlView();
+    },
+    setActiveDirty: (item) => {
+      if (project() === item) dirty = true;
+    },
+    openNextConflict: openNextSaveConflict,
+    reconcileProductionChapter: (chapter, task) =>
+      ProductionState?.reconcileChapter?.(chapter, {
+        reason: "冲突裁决采用了磁盘正文，旧质量报告已失效",
+        task,
+      }),
+    alignAfterBodyMutation: alignTaskAfterBodyMutation,
+    invalidateAfterAuthorEdit: invalidateProductionAfterAuthorEdit,
+    markHandoffStale: (chapter, task, reason) =>
+      ChapterState.markHandoffStale(chapter, task, { reason }),
+    renderAllActive: () => {
+      renderAll();
+      loadWriteView();
+      loadControlView();
+    },
+    recomputeDirty: () => {
+      dirty = (state.projects || []).some((item) => item?._dirty === true);
+    },
+    flushProject,
+  });
+
+  function normalizedTargetChapters(value) {
+    if (typeof Pipe?.normalizeTargetChapters === "function") return Pipe.normalizeTargetChapters(value);
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(400, Math.max(8, Math.round(n))) : 20;
   }
 
   function bumpProjectRevision(p = project()) {
@@ -559,13 +617,14 @@
     // 工作区自己合并“生成锁”与“系统镜像”两类只读原因。
     Ws?.syncReadOnly?.({ announce: genLocked });
     // 写章台正文/标题只读，防止生成中串改
+    const schemaReadOnly = Boolean(projectReadOnlyReason());
     const ms = $("manuscript");
-    if (ms) ms.readOnly = genLocked;
+    if (ms) ms.readOnly = genLocked || schemaReadOnly;
     const ct = $("chapterTitle");
-    if (ct) ct.readOnly = genLocked;
+    if (ct) ct.readOnly = genLocked || schemaReadOnly;
     for (const id of ["btnGenerate", "composeMode", "btnDigest", "btnSaveChapter"]) {
       const control = $(id);
-      if (control) control.disabled = genLocked;
+      if (control) control.disabled = genLocked || schemaReadOnly;
     }
     if (genLocked && $("chapterMore")) $("chapterMore").open = false;
     if (genLocked) setAutoStatus(( $("autoStatus")?.textContent || "生成中") + " · 已锁定切章");
@@ -585,12 +644,31 @@
     return true;
   }
 
+  function projectReadOnlyReason(p = project()) {
+    if (!p || !ProjectMigrations) return null;
+    const compatibility = ProjectMigrations.compatibility?.(p);
+    if (!compatibility?.readOnly) return null;
+    return {
+      kind: "schema",
+      code: compatibility.code || "SCHEMA_VERSION_UNSUPPORTED",
+      message: `${compatibility.reason}；当前作品已只读保护，请升级 Inkwell 后再编辑`,
+    };
+  }
+
+  function guardProjectWritable(actionLabel = "修改作品") {
+    const reason = projectReadOnlyReason();
+    if (!reason) return false;
+    setVaultStatus("格式版本较新 · 当前作品只读", "err");
+    alert(`${reason.message}\n\n已阻止“${actionLabel}”，磁盘内容没有被覆盖。`);
+    return true;
+  }
+
   function setVaultStatus(text, kind) {
     const el = $("vaultStatus");
     if (!el) return;
     el.textContent = text;
     el.className = "vault-status global-status" + (kind ? ` ${kind}` : "");
-    el.title = vaultPath || (kind === "err" ? `${text}。当前仍可编辑浏览器缓存；存盘、快照和目录操作不可用。` : text);
+    el.title = vaultPath || text;
   }
 
   /** 顶栏显示绝对 vault 路径 */
@@ -667,10 +745,7 @@
     vaultOnline = true;
     state = { projects: [], activeId: null };
     libraryBooks = [];
-    saveConflictQueue = [];
-    activeSaveConflict = null;
-    conflictProjectsNeedSave.clear();
-    persistSaveConflicts();
+    SaveConflicts.reset();
     diskMtime = 0;
     dismissedMtime = 0;
     dirty = false;
@@ -716,6 +791,10 @@
   }
 
   function markDirty() {
+    if (projectReadOnlyReason()) {
+      setVaultStatus("格式版本较新 · 当前作品只读", "err");
+      return false;
+    }
     dirty = true;
     const p = project();
     if (p) {
@@ -725,6 +804,7 @@
     }
     if (vaultOnline) setVaultStatus(`未存盘 · ${p?.slug || ""}`, "warn");
     renderChapterHeaderState(p, p?.chapters?.find((chapter) => chapter.id === p.activeChapterId));
+    return true;
   }
 
   function markClean(extra, guard = {}) {
@@ -751,6 +831,10 @@
 
   function scheduleDiskSave(immediate = false) {
     const current = project();
+    if (projectReadOnlyReason(current)) {
+      setVaultStatus("格式版本较新 · 已阻止存盘", "err");
+      return;
+    }
     if (current) {
       current._dirty = true;
       Store.saveRecovery?.(current);
@@ -792,63 +876,103 @@
    * @returns {boolean|null} true=已合并；false=章节路径但匹配失败；null=无需合并（非章节）
    */
   function mergeWorkspaceIntoProject(p) {
-    if (!p || !Ws) return null;
-    const workspaceSlug = String(Ws.getSlug?.() || "");
-    if (workspaceSlug && p.slug && workspaceSlug !== p.slug) return null;
-    // 工作区未修改时绝不能把仍留在隐藏编辑器里的旧文件合并进工程。
-    if (!Ws.isDirty?.()) return null;
-    const wsPath = Ws.getOpenPath?.();
-    if (!wsPath) return null;
     const ed = document.getElementById("wsEditor");
-    if (!ed) return null;
-    const norm = String(wsPath).replace(/\\/g, "/");
-    if (!norm.startsWith("章节/") || !/\.md$/i.test(norm)) return null;
-    // 工作区编辑的是完整 Markdown；chapters[].body 只保存正文。
-    const content =
-      window.NOVEL_CHAPTER_FORMAT?.chapterBodyFromMarkdown?.(ed.value) ?? ed.value;
-    const base = norm.split("/").pop() || "";
-    const baseNoExt = base.replace(/\.md$/i, "");
-    const chapters = p.chapters || [];
-    let ch =
-      chapters.find((c) => {
-        const f = String(c._file || c.path || "").replace(/\\/g, "/");
-        return f === norm || f === wsPath;
-      }) ||
-      chapters.find((c) => {
-        const f = String(c._file || c.path || "").replace(/\\/g, "/");
-        return f === base || f.endsWith("/" + base);
-      }) ||
-      chapters.find((c) => {
-        const title = String(c.title || "").trim();
-        if (!title) return false;
-        return baseNoExt === title || baseNoExt.endsWith("-" + title) || baseNoExt.endsWith(title);
-      });
-    if (!ch) return false;
-    ch.body = content;
-    ch.updatedAt = Date.now();
-    if (!ch._file) ch._file = norm;
-    return true;
-  }
-
-  /** 是否应跳过整本 PUT book：章节 dirty 且 merge 失败时，避免旧 body 盖 md */
-  function shouldSkipBookPutAfterWs(merged) {
-    return merged === false;
-  }
-
-  function projectHasPendingSaveConflict(p) {
-    if (!p) return false;
-    return saveConflictQueue.some(
-      (entry) => entry.projectId === p.id || (entry.slug && entry.slug === p.slug)
+    if (!p || !Ws || !ed) return null;
+    return PersistenceFactory.mergeWorkspaceChapter(
+      p,
+      {
+        slug: Ws.getSlug?.(),
+        dirty: Ws.isDirty?.(),
+        path: Ws.getOpenPath?.(),
+        content: ed.value,
+      },
+      {
+        chapterBodyFromMarkdown: window.NOVEL_CHAPTER_FORMAT?.chapterBodyFromMarkdown,
+        onBodyChanged: (chapter) =>
+          invalidateProductionAfterAuthorEdit(
+            chapter,
+            (p.tasks || []).find((task) => task.id === chapter.taskId),
+            "工作区 Markdown 已修改正文，等待重新通过叙事质量闸门"
+          ),
+      }
     );
   }
 
-  function clonePlain(value) {
+  async function saveWorkspaceOnly(p, { announce = false } = {}) {
+    const path = Ws?.getOpenPath?.();
+    const editor = document.getElementById("wsEditor");
+    if (!path || !editor || !p?.slug) return null;
+    const snapshot = Ws?.captureSaveState?.() || {
+      slug: p.slug,
+      path,
+      content: editor.value,
+    };
     try {
-      return JSON.parse(JSON.stringify(value));
-    } catch (_) {
-      return null;
+      const result = await Vault.writeFile(p.slug, path, snapshot.content ?? editor.value, snapshot.expectedRevision);
+      const cleaned = Ws?.markClean?.(snapshot, result) !== false;
+      if (announce) {
+        setVaultStatus(
+          cleaned
+            ? `已存文件（未匹配章节元数据）· ${path}`
+            : `较早文件版本已保存 · ${path} 仍有未保存修改`,
+          "warn"
+        );
+      }
+      return result;
+    } catch (error) {
+      if (announce) setVaultStatus("存文件失败: " + (error.message || error), "err");
+      throw error;
     }
   }
+
+  function projectHasPendingSaveConflict(p) {
+    return SaveConflicts.hasPending(p);
+  }
+
+  const Persistence = PersistenceFactory.create({
+    isOnline: () => vaultOnline,
+    getActiveProject: project,
+    assertWritable: (item) => ProjectMigrations.assertWritable(item),
+    ensureWorkspaceSaved,
+    hasPendingConflict: projectHasPendingSaveConflict,
+    openNextConflict: openNextSaveConflict,
+    setStatus: setVaultStatus,
+    mergeWorkspace: mergeWorkspaceIntoProject,
+    saveWorkspaceOnly,
+    syncActiveEditor: syncEditorToProject,
+    readRevision: (item) => projectSaveRevisions.read(item),
+    saveBook: (slug, item) => Vault.saveBook(slug, item),
+    createBook: (title) => Vault.createBook(title || "新书", ""),
+    loadBook: (slug) => Vault.loadBook(slug),
+    resolveBookConflict: (local, disk) => window.NOVEL_VAULT_UI.resolveBookConflict(local, disk),
+    renderActive: () => { loadControlView(); loadPipelineView(); loadWriteView(); loadGraphView(); },
+    setDiskMtime: (value) => {
+      diskMtime = value;
+    },
+    adoptBaselines: (item, result, warnings) =>
+      Vault.adoptChapterBaselines?.(item, result, warnings),
+    reconcileWarnings: reconcileSaveWarnings,
+    markClean,
+    refreshLibrary: refreshLibrarySidebar,
+    bumpRevision: bumpProjectRevision,
+    now: Date.now,
+    saveRecovery: (item) => Store.saveRecovery?.(item),
+    saveCache: () => Store.saveAll(state),
+    getObservability: () => window.NOVEL_OBSERVABILITY,
+  });
+
+  const WriteCases = WriteUseCasesFactory.create({
+    pipe: Pipe,
+    productionState: ProductionState,
+    getProductionEngine: () => window.NOVEL_PRODUCTION_ENGINE,
+    uid: () => Store.uid(),
+    persistCheckpoint: (item) => {
+      Store.saveAll(state);
+      Store.saveRecovery?.(item);
+    },
+    flushProject,
+    getObservability: () => window.NOVEL_OBSERVABILITY,
+  });
 
   function isWriteViewActive() {
     return !!document.getElementById("view-write")?.classList.contains("active");
@@ -879,82 +1003,20 @@
       pendingConflict: projectHasPendingSaveConflict(p),
       editorDesynced,
       workspaceChapterDirty: workspaceChapterPathIsOpen(p),
-      saveInFlight: !!diskSavePromise,
+      saveInFlight: Persistence.isSaving(),
     };
   }
 
   function dropProjectConflicts(p, extraSlugs = []) {
-    if (!p) return;
-    const slugs = new Set([p.slug, ...extraSlugs].filter(Boolean));
-    saveConflictQueue = saveConflictQueue.filter(
-      (entry) => !(entry.projectId === p.id || (entry.slug && slugs.has(entry.slug)))
-    );
-    if (
-      activeSaveConflict &&
-      (activeSaveConflict.projectId === p.id || (activeSaveConflict.slug && slugs.has(activeSaveConflict.slug)))
-    ) {
-      closeSaveConflictModal({ keepPending: false });
-    }
-    persistSaveConflicts();
+    return SaveConflicts.drop(p, extraSlugs);
   }
 
   function refreshConflictDiskSides(p, freshBook) {
-    if (!p || !freshBook) return 0;
-    const freshChapters = Array.isArray(freshBook.chapters) ? freshBook.chapters : [];
-    let updated = 0;
-    for (const entry of saveConflictQueue) {
-      if (!(entry.projectId === p.id || (entry.slug && entry.slug === p.slug))) continue;
-      const diskCh =
-        freshChapters.find((chapter) => chapterMatchesConflict(chapter, entry)) ||
-        freshChapters.find(
-          (chapter) =>
-            (entry.diskChapter?.id && chapter.id === entry.diskChapter.id) ||
-            (entry.localChapter?.id && chapter.id === entry.localChapter.id)
-        );
-      if (!diskCh) continue;
-      entry.diskChapter = clonePlain(diskCh);
-      updated += 1;
-    }
-    return updated;
+    return SaveConflicts.refresh(p, freshBook);
   }
 
   function enqueueChapterConflictsIfDiverged(p, freshBook) {
-    if (!p || !freshBook) return 0;
-    const localChapters = Array.isArray(p.chapters) ? p.chapters : [];
-    const diskChapters = Array.isArray(freshBook.chapters) ? freshBook.chapters : [];
-    let added = 0;
-    for (const diskCh of diskChapters) {
-      const localCh = localChapters.find(
-        (chapter) =>
-          (diskCh?.id && chapter.id === diskCh.id) ||
-          (diskCh?._file &&
-            String(chapter._file || chapter.path || "").replace(/\\/g, "/") ===
-              String(diskCh._file).replace(/\\/g, "/"))
-      );
-      if (!Vault.chapterBodiesDiverge?.(localCh, diskCh)) continue;
-      const path = diskCh._file || localCh?._file || "";
-      const duplicate = saveConflictQueue.some(
-        (entry) => entry.slug === p.slug && (entry.warning?.path || "") === path
-      );
-      if (duplicate) continue;
-      saveConflictQueue.push({
-        warning: { kind: "externalConflict", path, chapterId: diskCh.id || localCh?.id },
-        localChapter: clonePlain(localCh),
-        diskChapter: clonePlain(diskCh),
-        projectId: p.id,
-        slug: p.slug,
-        detectedAt: Date.now(),
-        detectedRevision: projectSaveRevisions.read(p),
-      });
-      added += 1;
-    }
-    if (added) {
-      p._dirty = true;
-      Store.saveRecovery?.(p);
-      persistSaveConflicts();
-      Store.saveAll(state);
-    }
-    return added;
+    return SaveConflicts.enqueueDiverged(p, freshBook);
   }
 
   /**
@@ -963,6 +1025,9 @@
    */
   async function replaceMemoryWithDisk(p, fresh, { intent } = {}) {
     if (!p || !fresh) return { replaced: false };
+    ProductionState?.reconcileProject?.(fresh, {
+      reason: "采用磁盘正文后，旧质量报告已失效",
+    });
     const wantSilent = intent !== "discard";
     if (wantSilent) {
       const verdict = Vault.classifyDiskAdopt(diskAdoptFlags(p));
@@ -1010,158 +1075,59 @@
   }
 
   function persistSaveConflicts() {
-    const saved = Store.savePendingConflicts?.(saveConflictQueue);
-    if (saved === false) {
-      setVaultStatus("冲突恢复副本写入失败 · 请勿关闭应用", "err");
-      return false;
-    }
-    return true;
+    return SaveConflicts.persist();
   }
 
-  /** 关窗同步 PUT 不能 await reload；尽量拉回磁盘章后写入冲突队列。 */
-  function persistSyncSaveConflicts(p, warnings, saveRevision) {
-    const relevant = (Array.isArray(warnings) ? warnings : []).filter((warning) =>
-      ["externalConflict", "preservedExternal"].includes(warning?.kind)
-    );
-    const conflicts = relevant.filter((warning) => warning.kind === "externalConflict");
-    if (!p || !conflicts.length) return false;
-    let diskProject = null;
+  /** 关窗同步 PUT 不能 await reload；XHR 仅留在浏览器适配器。 */
+  function loadConflictDiskSync(p) {
     try {
       const gxhr = new XMLHttpRequest();
       gxhr.open("GET", `/api/books/${encodeURIComponent(p.slug)}`, false);
       applySyncAuth(gxhr);
       gxhr.send(null);
       if (UiShell?.isSuccessfulHttpStatus?.(gxhr.status)) {
-        diskProject = JSON.parse(gxhr.responseText || "null");
+        return JSON.parse(gxhr.responseText || "null");
       }
     } catch (_) {}
-    if (diskProject && typeof Vault.reconcileSavedBook === "function") {
-      const result = Vault.reconcileSavedBook(p, diskProject, relevant) || { conflicts: [] };
-      for (const conflict of result.conflicts || []) {
-        const duplicate = saveConflictQueue.some(
-          (entry) => entry.slug === p.slug && entry.warning?.path === conflict.warning?.path
-        );
-        if (duplicate) continue;
-        saveConflictQueue.push({
-          ...conflict,
-          projectId: p.id,
-          slug: p.slug,
-          detectedAt: Date.now(),
-          detectedRevision: saveRevision,
-        });
-      }
-    } else {
-      for (const warning of conflicts) {
-        if (saveConflictQueue.some((entry) => entry.slug === p.slug && entry.warning?.path === warning.path)) {
-          continue;
-        }
-        const path = String(warning.path || "").replace(/\\/g, "/");
-        const localChapter = (p.chapters || []).find((chapter) => {
-          const chapterPath = String(chapter._file || chapter.path || "").replace(/\\/g, "/");
-          return (warning.chapterId && chapter.id === warning.chapterId) || (path && chapterPath === path);
-        });
-        saveConflictQueue.push({
-          warning,
-          localChapter: localChapter || null,
-          diskChapter: null,
-          projectId: p.id,
-          slug: p.slug,
-          detectedAt: Date.now(),
-          detectedRevision: saveRevision,
-        });
-      }
-    }
-    p._dirty = true;
-    Store.saveRecovery?.(p);
-    persistSaveConflicts();
-    return true;
+    return null;
   }
 
-  function chapterMatchesConflict(chapter, entry) {
-    if (!chapter || !entry) return false;
-    const localId = entry.localChapter?.id;
-    const diskId = entry.diskChapter?.id;
-    const path = String(entry.warning?.path || entry.diskChapter?._file || "").replace(/\\/g, "/");
-    const chapterPath = String(chapter._file || chapter.path || "").replace(/\\/g, "/");
-    return !!(
-      (localId && chapter.id === localId) ||
-      (diskId && chapter.id === diskId) ||
-      (path && chapterPath === path)
-    );
+  function persistSyncSaveConflicts(p, warnings, saveRevision) {
+    return SaveConflicts.persistSync(p, warnings, saveRevision);
   }
 
   /** 把持久化的本地一侧重新挂回刚从磁盘加载的作品，保持冲突的两份正文。 */
   function hydratePersistedConflictsForProject(p) {
-    if (!p || p._stub) return 0;
-    let hydrated = 0;
-    const chapters = Array.isArray(p.chapters) ? p.chapters : (p.chapters = []);
-    for (const entry of saveConflictQueue) {
-      if (!(entry.projectId === p.id || (entry.slug && entry.slug === p.slug))) continue;
-      entry.projectId = p.id;
-      entry.slug = p.slug;
-      const localSnapshot = entry.localChapter ? JSON.parse(JSON.stringify(entry.localChapter)) : null;
-      if (!localSnapshot) continue;
-      let chapter = chapters.find((item) => chapterMatchesConflict(item, entry));
-      if (chapter) Object.assign(chapter, localSnapshot);
-      else {
-        chapter = localSnapshot;
-        chapters.push(chapter);
-      }
-      entry.localChapter = chapter;
-      p._dirty = true;
-      hydrated += 1;
-    }
-    if (hydrated) {
-      Store.saveRecovery?.(p);
-      Store.saveAll(state);
-    }
-    return hydrated;
+    return SaveConflicts.hydrate(p);
   }
 
   function restorePersistedSaveConflicts() {
-    const restored = Store.loadPendingConflicts?.() || [];
-    saveConflictQueue = restored.filter((entry) =>
-      state.projects.some(
-        (item) => item && (item.id === entry.projectId || (entry.slug && item.slug === entry.slug))
-      )
-    );
-    activeSaveConflict = null;
-    conflictProjectsNeedSave.clear();
-    for (const p of state.projects || []) hydratePersistedConflictsForProject(p);
-    persistSaveConflicts();
-    return saveConflictQueue.length;
+    return SaveConflicts.restore();
   }
 
-  function findConflictLocalChapter(p, entry) {
-    const chapters = Array.isArray(p?.chapters) ? p.chapters : [];
-    return chapters.find((chapter) => chapterMatchesConflict(chapter, entry));
-  }
-
-  function closeSaveConflictModal({ keepPending = true } = {}) {
+  function hideSaveConflictModal() {
     const modal = $("saveConflictModal");
     if (modal) modal.hidden = true;
     syncModalBackgroundInert();
-    if (!keepPending) activeSaveConflict = null;
     modalReturnFocus?.focus?.();
     modalReturnFocus = null;
-    if (keepPending && activeSaveConflict) {
-      setVaultStatus(`保存冲突待处理 · ${activeSaveConflict.warning?.path || activeSaveConflict.slug}`, "warn");
+  }
+
+  function closeSaveConflictModal({ keepPending = true } = {}) {
+    const pending = SaveConflicts.closeActive({ keepPending });
+    hideSaveConflictModal();
+    if (keepPending && pending) {
+      setVaultStatus(`保存冲突待处理 · ${pending.warning?.path || pending.slug}`, "warn");
     }
   }
 
   function openNextSaveConflict() {
-    if (!activeSaveConflict) activeSaveConflict = saveConflictQueue[0] || null;
-    const entry = activeSaveConflict;
-    if (!entry) return false;
-    const p = state.projects.find((item) => item.id === entry.projectId || item.slug === entry.slug);
-    const queued = entry.localChapter;
-    const live = findConflictLocalChapter(p, entry);
-    const diskChapter = entry.diskChapter || {};
-    const localChapter = Vault.pickLocalChapterForConflictDisplay?.(queued, live, diskChapter) || queued || live || null;
-    const position = Math.max(0, saveConflictQueue.indexOf(entry));
+    const view = SaveConflicts.activateNext();
+    if (!view) return false;
+    const { entry, localChapter, diskChapter, position, count } = view;
     $("saveConflictChapter").textContent = diskChapter.title || localChapter?.title || "未命名章节";
     $("saveConflictPath").textContent = entry.warning?.path || diskChapter._file || "";
-    $("saveConflictQueue").textContent = saveConflictQueue.length > 1 ? `${position + 1} / ${saveConflictQueue.length}` : "1 个冲突";
+    $("saveConflictQueue").textContent = count > 1 ? `${position + 1} / ${count}` : "1 个冲突";
     $("saveConflictLocal").textContent = localChapter?.body || "（内存中未找到对应章节）";
     $("saveConflictDisk").textContent = diskChapter.body || "（磁盘正文为空）";
     $("saveConflictMerge").value = localChapter?.body || diskChapter.body || "";
@@ -1178,250 +1144,36 @@
     warnings,
     submittedRevision = projectSaveRevisions.read(p)
   ) {
-    const relevant = (Array.isArray(warnings) ? warnings : []).filter((warning) =>
-      ["externalConflict", "preservedExternal"].includes(warning?.kind)
-    );
-    if (!relevant.length) return { added: 0, conflicts: 0 };
-    let fresh;
-    try {
-      fresh = await Vault.reloadBook(p.slug);
-    } catch (error) {
-      p._dirty = true;
-      Store.saveRecovery?.(p);
-      throw new Error(`磁盘已保护外部版本，但读取合并结果失败：${error.message || error}`);
-    }
-    const result = Vault.reconcileSavedBook?.(p, fresh, relevant) || { added: [], conflicts: [] };
-    for (const conflict of result.conflicts || []) {
-      const duplicate = saveConflictQueue.some(
-        (entry) => entry.slug === p.slug && entry.warning?.path === conflict.warning?.path
-      );
-      if (!duplicate) {
-        saveConflictQueue.push({
-          ...conflict,
-          projectId: p.id,
-          slug: p.slug,
-          detectedAt: Date.now(),
-          detectedRevision: submittedRevision,
-        });
-      }
-    }
-    if ((result.added || []).length || (result.conflicts || []).length) {
-      Store.saveAll(state);
-      if (project() === p) {
-        loadWriteView();
-        loadControlView();
-      }
-    }
-    if ((result.conflicts || []).length) {
-      p._dirty = true;
-      Store.saveRecovery?.(p);
-      if (project() === p) dirty = true;
-      const conflictRecoverySaved = persistSaveConflicts();
-      setVaultStatus(
-        conflictRecoverySaved
-          ? `已保护磁盘新版 · 待处理 ${(result.conflicts || []).length} 个冲突`
-          : "冲突仍在内存，但恢复副本写入失败 · 请立即处理且不要关闭应用",
-        conflictRecoverySaved ? "warn" : "err"
-      );
-      if (project() === p) openNextSaveConflict();
-    }
-    return { added: (result.added || []).length, conflicts: (result.conflicts || []).length };
+    return SaveConflicts.reconcileWarnings(p, warnings, submittedRevision);
   }
 
   async function resolveActiveSaveConflict(choice) {
-    const entry = activeSaveConflict;
-    if (!entry) return;
-    const p = state.projects.find((item) => item.id === entry.projectId || item.slug === entry.slug);
-    if (!p) throw new Error("冲突对应的作品已不在当前书库中");
-    const localChapter = findConflictLocalChapter(p, entry);
-    const diskChapter = JSON.parse(JSON.stringify(entry.diskChapter || {}));
-    const chapters = Array.isArray(p.chapters) ? p.chapters : (p.chapters = []);
-    const index = localChapter ? chapters.indexOf(localChapter) : -1;
-    const changedSinceDetection =
-      entry.detectedRevision == null ||
-      !projectSaveRevisions.matches(p, entry.detectedRevision);
-
-    if (choice === "disk") {
-      if (index >= 0) chapters[index] = diskChapter;
-      else chapters.push(diskChapter);
-      if (changedSinceDetection) conflictProjectsNeedSave.add(p.id);
-    } else {
-      if (!localChapter) throw new Error("内存版本不存在，不能覆盖磁盘");
-      const body = choice === "merge" ? $("saveConflictMerge").value : localChapter.body || "";
-      localChapter.body = body;
-      localChapter.updatedAt = Date.now();
-      localChapter._file = diskChapter._file || localChapter._file;
-      localChapter._fileMtime = diskChapter._fileMtime || localChapter._fileMtime || 0;
-      localChapter.handoffStatus = "stale";
-      localChapter.handoffError = choice === "merge" ? "手工合并后等待重新交接" : "覆盖外部版本后等待重新交接";
-      conflictProjectsNeedSave.add(p.id);
-    }
-
-    saveConflictQueue = saveConflictQueue.filter((item) => item !== entry);
-    activeSaveConflict = null;
-    closeSaveConflictModal({ keepPending: false });
-    if (!persistSaveConflicts()) {
-      throw new Error("冲突选择已应用，但剩余冲突的恢复副本写入失败");
-    }
-    Store.saveAll(state);
-    if (project() === p) {
-      renderAll();
-      loadWriteView();
-      loadControlView();
-    }
-
-    const moreForProject = projectHasPendingSaveConflict(p);
-    if (!moreForProject) {
-      if (conflictProjectsNeedSave.has(p.id)) {
-        conflictProjectsNeedSave.delete(p.id);
-        p._dirty = true;
-        Store.saveRecovery?.(p);
-        await flushProject(p);
-      } else {
-        p._dirty = false;
-        Store.clearRecovery?.(p);
-        dirty = (state.projects || []).some((item) => item?._dirty === true);
-        Store.saveAll(state);
-        setVaultStatus(`已采用磁盘新版 · ${p.slug}`, "ok");
-      }
-    }
-    if (saveConflictQueue.length) openNextSaveConflict();
+    return SaveConflicts.resolve(choice, {
+      mergeBody: choice === "merge" ? $("saveConflictMerge").value : "",
+    });
   }
 
   async function flushToDisk() {
-    if (!vaultOnline) return;
-    // 若已有保存正在进行，先等待，再重新读取当前项目并补一次保存。
-    // 这样切书/切库不会在旧保存尚未完成时继续。
-    if (diskSavePromise) {
-      await diskSavePromise;
-      return flushToDisk();
-    }
-    const saveRun = (async () => {
-      await ensureWorkspaceSaved("整本保存");
-      const p = project();
-      if (!p?.slug) return;
-      if (projectHasPendingSaveConflict(p)) {
-        openNextSaveConflict();
-        throw new Error("存在尚未处理的章节保存冲突");
-      }
-      setVaultStatus(`写入 ${p.slug}…`, "busy");
-      const merged = mergeWorkspaceIntoProject(p);
-      // A1：章节打开但匹配失败 → 只写文件，不 PUT 整本
-      if (shouldSkipBookPutAfterWs(merged)) {
-        const wsPath = Ws?.getOpenPath?.();
-        const ed = document.getElementById("wsEditor");
-        if (wsPath && ed && p.slug) {
-          try {
-            const wsSnapshot = Ws?.captureSaveState?.();
-            await Vault.writeFile(p.slug, wsPath, wsSnapshot?.content ?? ed.value);
-            const cleaned = Ws?.markClean?.(wsSnapshot) !== false;
-            setVaultStatus(
-              cleaned
-                ? `已存文件（未匹配章节元数据）· ${wsPath}`
-                : `较早文件版本已保存 · ${wsPath} 仍有未保存修改`,
-              "warn"
-            );
-          } catch (e) {
-            setVaultStatus("存文件失败: " + (e.message || e), "err");
-            throw e;
-          }
-        }
-        return;
-      }
-      syncEditorToProject();
-      const saveRevision = projectSaveRevisions.read(p);
-      const res = await Vault.saveBook(p.slug, p);
-      if (res?.path) p._path = res.path;
-      if (res?.mtime) diskMtime = res.mtime;
-      const warnings = Array.isArray(res?.saveWarnings) ? res.saveWarnings : [];
-      Vault.adoptChapterBaselines?.(p, res, warnings);
-      const reconciled = await reconcileSaveWarnings(p, warnings, saveRevision);
-      if (!reconciled.conflicts) {
-        markClean(
-          reconciled.added ? `已同步并加入 ${reconciled.added} 个外部章节 · ${p.slug}` : `已同步 · ${p.slug}`,
-          { project: p, revision: saveRevision }
-        );
-      }
-      refreshLibrarySidebar();
-    })();
-    diskSavePromise = saveRun;
-    try {
-      return await saveRun;
-    } finally {
-      if (diskSavePromise === saveRun) diskSavePromise = null;
-    }
+    return Persistence.flushCurrent();
   }
 
   /**
    * 落盘固定书对象（连写闭包 p），不经 project() 以免切书后写错本。
-   * 与 flushToDisk / 关窗 PUT 共用 diskSavePromise，禁止并发写盘。
+   * 与 flushToDisk 共用 Persistence 的单航班队列，禁止并发写盘。
    */
   async function flushProject(p) {
-    if (!p) return;
-    if (diskSavePromise) {
-      await diskSavePromise;
-      return flushProject(p);
-    }
-    const saveRun = (async () => {
-      if (projectHasPendingSaveConflict(p)) {
-        if (project() === p) openNextSaveConflict();
-        throw new Error("存在尚未处理的章节保存冲突");
-      }
-      bumpProjectRevision(p);
-      p.updatedAt = Date.now();
-      p._dirty = true;
-      Store.saveRecovery?.(p);
-      const merged = mergeWorkspaceIntoProject(p);
-      if (shouldSkipBookPutAfterWs(merged)) {
-        const wsPath = Ws?.getOpenPath?.();
-        const ed = document.getElementById("wsEditor");
-        if (vaultOnline && p.slug && wsPath && ed) {
-          const wsSnapshot = Ws?.captureSaveState?.();
-          await Vault.writeFile(p.slug, wsPath, wsSnapshot?.content ?? ed.value);
-          Ws?.markClean?.(wsSnapshot);
-        }
-        Store.saveAll(state);
-        return null;
-      }
-      // 写章台编辑器仅在 active 属于 p 时同步，避免串书
-      const active = project();
-      if (active && active === p) syncEditorToProject();
-      Store.saveAll(state);
-      if (!vaultOnline || !p.slug) return;
-      const saveRevision = projectSaveRevisions.read(p);
-      const res = await Vault.saveBook(p.slug, p);
-      if (res?.path) p._path = res.path;
-      if (res?.mtime && active === p) diskMtime = res.mtime;
-      const warnings = Array.isArray(res?.saveWarnings) ? res.saveWarnings : [];
-      Vault.adoptChapterBaselines?.(p, res, warnings);
-      const reconciled = await reconcileSaveWarnings(p, warnings, saveRevision);
-      if (active === p) {
-        if (!reconciled.conflicts) {
-          markClean(
-            reconciled.added ? `已同步并加入 ${reconciled.added} 个外部章节 · ${p.slug}` : `已同步 · ${p.slug}`,
-            { project: p, revision: saveRevision }
-          );
-        }
-      } else if (!reconciled.conflicts) {
-        markClean("", { project: p, revision: saveRevision });
-      }
-      return res;
-    })();
-    diskSavePromise = saveRun;
-    try {
-      return await saveRun;
-    } finally {
-      if (diskSavePromise === saveRun) diskSavePromise = null;
-    }
+    return Persistence.flushProject(p);
   }
 
   /** 切换书库前的统一事务门禁：阻止生成中切换，并确保工作区与当前书均已落盘。 */
   async function prepareVaultSwitch() {
     if (guardGen("切换书库")) return false;
     try {
+      const cur = project();
+      // 新格式作品只读浏览时允许离开；不能为了“切换”先拿旧客户端回写它。
+      if (projectReadOnlyReason(cur)) return true;
       await ensureWorkspaceSaved("切换书库");
       syncEditorToProject();
-      const cur = project();
       if (vaultOnline && cur?.slug && !cur._stub) await flushToDisk();
       else Store.saveAll(state);
       return true;
@@ -1450,11 +1202,15 @@
   /** 桌面关窗同步钩子：WS dirty → merge chapter → PUT file；merge 失败则不 PUT book */
   window.__mogaoFlushSync = () => {
     try {
-      if (diskSavePromise) {
+      if (Persistence.isSaving()) {
         console.warn("[inkwell] skip synchronous book save: async save in flight");
         return false;
       }
       const p = project();
+      if (projectReadOnlyReason(p)) {
+        console.warn("[inkwell] skip synchronous save: project schema is read-only");
+        return false;
+      }
       if (projectHasPendingSaveConflict(p)) {
         console.warn("[inkwell] skip synchronous book save: unresolved external conflict");
         return false;
@@ -1483,9 +1239,9 @@
         fxhr.open("PUT", `/api/books/${encodeURIComponent(wsSlug)}/file`, false);
         fxhr.setRequestHeader("Content-Type", "application/json");
         applySyncAuth(fxhr);
-        fxhr.send(JSON.stringify({ path: wsPath, content: workspaceSnapshot.content }));
+        fxhr.send(JSON.stringify({ path: wsPath, content: workspaceSnapshot.content, expectedRevision: workspaceSnapshot.expectedRevision }));
         assertSyncRequestSucceeded(fxhr, "资料文件同步保存");
-        if (Ws.markClean?.(workspaceSnapshot) === false) {
+        if (Ws.markClean?.(workspaceSnapshot, JSON.parse(fxhr.responseText || "{}")) === false) {
           throw new Error("资料文件保存期间出现了更新版本");
         }
       }
@@ -1493,7 +1249,7 @@
       if (p && merged === null) merged = mergeWorkspaceIntoProject(p);
       Store.saveAll(state);
       // A1：章节 merge 失败时只信文件，不 PUT book（避免旧 body 盖 md）
-      if (shouldSkipBookPutAfterWs(merged)) {
+      if (merged === false) {
         console.warn("[inkwell] skip PUT book: chapter file saved but not matched in project.chapters");
         return !Ws?.isDirty?.();
       }
@@ -1512,7 +1268,9 @@
           saveResult = {};
         }
         const warnings = Array.isArray(saveResult.saveWarnings) ? saveResult.saveWarnings : [];
-        if (warnings.some((warning) => warning?.kind === "externalConflict")) {
+        if (warnings.some((warning) => warning?.kind === "externalConflict" ||
+          (warning?.kind === "preservedExternal" && p.chapters?.some((chapter) =>
+            chapter.id === warning.chapterId || chapter._file === warning.path)))) {
           persistSyncSaveConflicts(p, warnings, saveRevision);
           persistSaveConflicts();
           return false;
@@ -1529,39 +1287,7 @@
     }
   };
 
-  /**
-   * A2：过滤可迁入项目——有章壳无 body 的 slim 缓存一律剔除
-   * @returns {{ ok: boolean, projects: array, reason?: string }}
-   */
-  function filterMigrateProjects(raw) {
-    const list = Array.isArray(raw) ? raw : [];
-    const hasChapterMeta = list.some((p) => (p.chapters || []).length > 0);
-    const anyBody = list.some((p) =>
-      (p.chapters || []).some((c) => String(c.body || "").trim())
-    );
-    if (hasChapterMeta && !anyBody) {
-      return {
-        ok: false,
-        projects: [],
-        reason: "缓存已精简无正文，请从 vault 打开书，不要迁入空壳",
-      };
-    }
-    const projects = list.filter((p) => {
-      const chs = p.chapters || [];
-      const hasBody = chs.some((c) => String(c.body || "").trim());
-      if (!p.slug && !hasBody) return false;
-      if (chs.length > 0 && !hasBody) return false;
-      return true;
-    });
-    if (!projects.length) {
-      return {
-        ok: false,
-        projects: [],
-        reason: "缓存已精简无正文，请从 vault 打开书，不要迁入空壳",
-      };
-    }
-    return { ok: true, projects };
-  }
+  const filterMigrateProjects = ProjectMigrations.filterMigratableProjects;
 
   function assertMigrationComplete(result, expected) {
     const migrated = Array.isArray(result?.migrated) ? result.migrated.length : 0;
@@ -1574,6 +1300,7 @@
   /** 持久化：编辑器→内存→localStorage 缓存→（防抖）磁盘 vault */
   function save(opts = {}) {
     const p = project();
+    if (projectReadOnlyReason(p)) return false;
     if (p) p.updatedAt = Date.now();
     if (!opts.skipEditorSync) syncEditorToProject();
     Store.saveAll(state);
@@ -1603,64 +1330,19 @@
     }
   }
 
-  function getLibraryFilterQuery() {
-    return String($("libFilter")?.value || "")
-      .trim()
-      .toLowerCase();
-  }
-
   function refreshLibrarySidebar() {
     const Lib = window.NOVEL_LIBRARY;
     if (!Lib) return;
     const active = project()?.slug;
-    // 用当前 state 快速画；后台 rescan 校正
-    const allBooks = (
-      libraryBooks.length > 0
-        ? libraryBooks.slice()
-        : state.projects.map((p) => ({
-            slug: p.slug,
-            title: p.title,
-            chapters: (p.chapters || []).length,
-            stage: p.stage,
-          }))
-    ).filter((book) => String(book?.slug || "").trim());
-    let books = allBooks.slice();
-    const q = getLibraryFilterQuery();
-    if (q) {
-      books = books.filter((b) => {
-        const title = String(b.title || "").toLowerCase();
-        const slug = String(b.slug || "").toLowerCase();
-        return title.includes(q) || slug.includes(q);
-      });
-    }
-    const emptyState = $("libraryEmptyState");
-    if (emptyState) {
-      const filteredEmpty = !!q && allBooks.length > 0 && books.length === 0;
-      emptyState.hidden = books.length > 0;
-      if ($("libraryEmptyKicker")) {
-        $("libraryEmptyKicker").textContent = filteredEmpty ? "没有匹配的作品" : "还没有可写的作品";
-      }
-      if ($("libraryEmptyTitle")) {
-        $("libraryEmptyTitle").textContent = filteredEmpty
-          ? "换一个关键词，或清除当前筛选。"
-          : "建立一本新书，或连接已有书库。";
-      }
-      if ($("libraryEmptyHint")) {
-        $("libraryEmptyHint").textContent = filteredEmpty
-          ? `未找到“${q}”`
-          : vaultOnline
-            ? "新书会安全写入当前本地书库。"
-            : "本地服务未连接。浏览器缓存只能临时保留本机草稿，文件、快照、导入导出和跨书搜索暂不可用。";
-      }
-      emptyState.querySelectorAll("[data-library-action]").forEach((button) => {
-        button.hidden = filteredEmpty ? button.dataset.libraryAction !== "clear" : button.dataset.libraryAction === "clear";
-      });
-    }
-    if (!vaultOnline && !books.length) {
-      $("libraryList")?.replaceChildren();
-      return;
-    }
-    Lib.renderSidebar(books, active, {
+    const model = Lib.buildSidebarModel(
+      libraryBooks,
+      state.projects,
+      $("libFilter")?.value,
+      vaultOnline
+    );
+    Lib.renderSidebarState(model);
+    if (model.clearList) return;
+    Lib.renderSidebar(model.books, active, {
       onSelect: async (slug) => {
         await switchToSlug(slug);
         setLibraryDrawer(false, true);
@@ -1695,7 +1377,7 @@
             target.title = saved?.title || bookPayload?.title || trimmed;
             target.slug = newSlug;
             Vault.adoptDiskConcurrencyMeta?.(target, bookPayload);
-            for (const entry of saveConflictQueue) {
+            for (const entry of SaveConflicts.list()) {
               if (entry.slug === slug) entry.slug = newSlug;
               if (entry.projectId === prevId) entry.projectId = target.id;
             }
@@ -1731,9 +1413,7 @@
         if (!confirm(`删除本地书夹「${title || slug}」？\n不可恢复（.history 一并删除）。`)) return;
         try {
           await Vault.deleteBook(slug);
-          saveConflictQueue = saveConflictQueue.filter((entry) => entry.slug !== slug);
-          if (activeSaveConflict?.slug === slug) activeSaveConflict = null;
-          persistSaveConflicts();
+          SaveConflicts.removeSlug(slug);
           state.projects = state.projects.filter((p) => p.slug !== slug);
           if (!state.projects.length) {
             if (confirm("书库已空。是否创建一本新的空白书？")) {
@@ -1850,7 +1530,7 @@
     if (!p?.slug) return;
     focusCheckBusy = true;
     try {
-      if (diskSavePromise) await diskSavePromise;
+      await Persistence.waitForIdle();
       const meta = await Vault.meta(p.slug);
       if (!meta?.mtime) return;
       if (!diskMtime) {
@@ -1907,153 +1587,21 @@
     }
   }
 
-  function canonicalFormJson(value) {
-    if (value === undefined || value === null) return "null";
-    if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
-    if (typeof value === "number") return Number.isFinite(value) ? JSON.stringify(value) : "null";
-    if (Array.isArray(value)) return `[${value.map(canonicalFormJson).join(",")}]`;
-    if (typeof value === "object") {
-      return `{${Object.keys(value)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${canonicalFormJson(value[key])}`)
-        .join(",")}}`;
-    }
-    return JSON.stringify(String(value));
-  }
-
-  function projectFormEqual(left, right) {
-    return canonicalFormJson(left) === canonicalFormJson(right);
-  }
-
-  function formTextEqual(left, right) {
-    return String(left || "") === String(right || "");
-  }
-
-  function formStringListEqual(left, right) {
-    const a = Array.isArray(left) ? left.map((item) => String(item || "").trim()).filter(Boolean) : [];
-    const b = Array.isArray(right) ? right.map((item) => String(item || "").trim()).filter(Boolean) : [];
-    return a.length === b.length && a.every((item, index) => item === b[index]);
-  }
-
-  function formIdSetEqual(left, right) {
-    const a = [...new Set((Array.isArray(left) ? left : []).map(String))].sort();
-    const b = [...new Set((Array.isArray(right) ? right : []).map(String))].sort();
-    return a.length === b.length && a.every((item, index) => item === b[index]);
-  }
-
-  function formGraphEqual(left, right) {
-    const empty = (graph) => {
-      if (!graph || typeof graph !== "object" || Array.isArray(graph)) return { nodes: [], edges: [] };
-      const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-      const edges = Array.isArray(graph.edges) ? graph.edges : [];
-      const extra = Object.keys(graph).filter((key) => key !== "nodes" && key !== "edges");
-      if (!nodes.length && !edges.length && !extra.length) return { nodes: [], edges: [] };
-      return graph;
-    };
-    return projectFormEqual(empty(left), empty(right));
-  }
-
-  function splitFormLines(value) {
-    return String(value || "")
-      .split(/\n+/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
   function syncEditorToProject() {
     const p = project();
     if (!p) return;
-    let changed = false;
-    const noteFormChange = (didChange) => {
-      if (didChange) changed = true;
-    };
-
-    if ($("ideaInput")) {
-      const next = $("ideaInput").value;
-      noteFormChange(!formTextEqual(p.ideaInput, next));
-      p.ideaInput = next;
+    const form = WriteUI.captureProjectForm($, {
+      graphReady:
+        p._graphFormReady || document.getElementById("view-graph")?.classList.contains("active"),
+    });
+    if (
+      PersistenceFactory.applyProjectForm(p, form, {
+        normalizeTargetChapters: normalizedTargetChapters,
+        recoverStylePacing: UiShell?.recoverConcatenatedStylePacing,
+      })
+    ) {
+      markDirty();
     }
-    if ($("authorNote")) {
-      const next = $("authorNote").value;
-      noteFormChange(!formTextEqual(p.authorNote, next));
-      p.authorNote = next;
-    }
-    if ($("targetChapters")) {
-      const next = Number($("targetChapters").value) || 20;
-      noteFormChange((Number(p.targetChapters) || 20) !== next);
-      p.targetChapters = next;
-    }
-
-    // 锁定表单始终在 DOM 中：只要控件存在就同步（boot 后 loadControlView 会填好）
-    if ($("lockLogline")) {
-      const ll = $("lockLogline").value;
-      // 避免 boot 早期空表单把已有 locks 冲掉：仅当控件已初始化过或当前有内容
-      if (p._locksFormReady || ll.trim() || $("lockForbidden")?.value || $("lockMust")?.value) {
-        p.locks = p.locks || { logline: "", forbidden: [], mustHonor: [], lockedFields: [] };
-        const nextLocks = {
-          ...p.locks,
-          logline: ll.trim(),
-          forbidden: splitFormLines($("lockForbidden")?.value),
-          mustHonor: splitFormLines($("lockMust")?.value),
-          lockedFields: [
-            $("lockWorld")?.checked ? "world" : "",
-            $("lockCast")?.checked ? "cast" : "",
-            $("lockSpine")?.checked ? "spine" : "",
-            ll.trim() ? "logline" : "",
-          ].filter(Boolean),
-        };
-        noteFormChange(
-          !formTextEqual(p.locks.logline, nextLocks.logline) ||
-            !formStringListEqual(p.locks.forbidden, nextLocks.forbidden) ||
-            !formStringListEqual(p.locks.mustHonor, nextLocks.mustHonor) ||
-            !formIdSetEqual(p.locks.lockedFields, nextLocks.lockedFields)
-        );
-        p.locks = nextLocks;
-        if (p.spine && p.locks.logline) p.spine.logline = p.locks.logline;
-        const nextDialogue = $("styleDialogue")?.value.trim() || "";
-        const nextPacing = UiShell?.recoverConcatenatedStylePacing
-          ? UiShell.recoverConcatenatedStylePacing($("stylePacing")?.value.trim() || "", nextDialogue || p.styleBible?.dialogue)
-          : $("stylePacing")?.value.trim() || "";
-        const nextStyle = {
-          ...(p.styleBible || {}),
-          pov: $("stylePov")?.value.trim() || "",
-          tense: $("styleTense")?.value.trim() || "",
-          pacing: nextPacing,
-          dialogue: nextDialogue,
-          rules: splitFormLines($("styleRules")?.value),
-          forbiddenPhrases: splitFormLines($("styleForbidden")?.value),
-          examples: ($("styleExamples")?.value || "")
-            .split(/\n\s*\n+/)
-            .map((item) => item.trim())
-            .filter(Boolean),
-        };
-        noteFormChange(
-          !formTextEqual(p.styleBible?.pov, nextStyle.pov) ||
-            !formTextEqual(p.styleBible?.tense, nextStyle.tense) ||
-            !formTextEqual(p.styleBible?.pacing, nextStyle.pacing) ||
-            !formTextEqual(p.styleBible?.dialogue, nextStyle.dialogue) ||
-            !formStringListEqual(p.styleBible?.rules, nextStyle.rules) ||
-            !formStringListEqual(p.styleBible?.forbiddenPhrases, nextStyle.forbiddenPhrases) ||
-            !formStringListEqual(p.styleBible?.examples, nextStyle.examples)
-        );
-        p.styleBible = nextStyle;
-      }
-    }
-
-    // 图谱 JSON：仅在能解析时写回，避免半截 JSON 毁掉 graph；空白/键序差异不当成脏。
-    if ($("graphJson") && (p._graphFormReady || document.getElementById("view-graph")?.classList.contains("active"))) {
-      try {
-        const g = JSON.parse($("graphJson").value || "{}");
-        if (g && typeof g === "object") {
-          noteFormChange(!formGraphEqual(p.graph, g));
-          p.graph = g;
-        }
-      } catch (_) {
-        /* 保留内存中的 graph */
-      }
-    }
-
-    if (changed) markDirty();
 
     // 正文：写章台可见，或当前编辑器属于激活章时
     const writeActive = document.getElementById("view-write")?.classList.contains("active");
@@ -2263,7 +1811,7 @@
     const tabs = [...document.querySelectorAll(selector)];
     if (!tabs.length) return;
     const index = Math.max(0, tabs.indexOf(current));
-    let nextIndex = index;
+    let nextIndex;
     if (key === "Home") nextIndex = 0;
     else if (key === "End") nextIndex = tabs.length - 1;
     else {
@@ -2285,176 +1833,6 @@
     }
     uiState.focusMode = active;
     if (persist !== false) persistUiState(false);
-  }
-
-  function handoffPresentation(chapter) {
-    if (!chapter?.body?.trim()) {
-      return { label: "无正文", state: "empty", tone: "neutral", detail: "本章没有正文，暂时无需交接" };
-    }
-    if (chapter.handoffStatus === "done") {
-      return { label: "已交接", state: "done", tone: "success", detail: "摘要、关系与故事记忆已经更新" };
-    }
-    if (chapter.handoffStatus === "running") {
-      return { label: "交接中", state: "running", tone: "warning", detail: "正在更新摘要、关系与故事记忆" };
-    }
-    const reason = String(chapter.handoffError || "").trim();
-    const pendingReason = /尚未|等待|待重新|编辑后|重写后|修订后|手工合并|覆盖外部/.test(reason);
-    if (reason && !pendingReason) {
-      return { label: "交接失败", state: "failed", tone: "danger", detail: reason };
-    }
-    return {
-      label: "待交接",
-      state: "stale",
-      tone: "warning",
-      detail: reason || "正文已有修改，等待更新摘要、关系与故事记忆",
-    };
-  }
-
-  /**
-   * 生成/修订结束后的状态文案，和章头标签用同一套词。
-   * 交接真的发起过并失败时必须说「交接失败」——不能章头显示失败、状态条却说「待交接」。
-   * 文案里保留「待」字，好让 generationRailState 不把失败误判成完成。
-   */
-  function handoffStatusSuffix(chapter, pendingLabel) {
-    const state = handoffPresentation(chapter).state;
-    if (state === "done") return { suffix: "记忆已交接", kind: "" };
-    if (state === "failed") return { suffix: "交接失败，待重试", kind: "warn" };
-    return { suffix: pendingLabel, kind: "warn" };
-  }
-
-  function chapterSavePresentation(p) {
-    if (!p) return { label: "待确认", state: "idle", tone: "neutral", detail: "尚未载入作品" };
-    if (projectHasPendingSaveConflict(p)) {
-      return { label: "保存冲突", state: "conflict", tone: "danger", detail: "磁盘与当前稿均已保留，请先处理保存冲突" };
-    }
-    if (!vaultOnline || !p.slug) {
-      return { label: "仅缓存", state: "cached", tone: "warning", detail: "本地书库未连接，当前修改只保存在浏览器缓存" };
-    }
-    if (p._dirty === true || (project() === p && dirty)) {
-      return { label: "未存盘", state: "dirty", tone: "warning", detail: "修改已进入恢复缓存，正在等待写入本地书库" };
-    }
-    return { label: "已存盘", state: "saved", tone: "success", detail: "当前作品已安全写入本地书库" };
-  }
-
-  function renderChapterHeaderState(p, chapter, prepared = {}) {
-    const saveState = chapterSavePresentation(p);
-    const handoffState = prepared.handoff || handoffPresentation(chapter);
-    const saveButton = $("btnSaveChapter");
-    if ($("chapterSaveState")) $("chapterSaveState").textContent = saveState.label;
-    if (saveButton) {
-      saveButton.dataset.state = saveState.state;
-      saveButton.dataset.tone = saveState.tone;
-      saveButton.title = saveState.detail;
-      saveButton.setAttribute("aria-label", `保存本章。当前状态：${saveState.label}。${saveState.detail}`);
-      saveButton.disabled = genLocked;
-    }
-    const handoffButton = $("chapterHandoffStatus");
-    if ($("chapterHandoffState")) $("chapterHandoffState").textContent = handoffState.label;
-    if (handoffButton) {
-      handoffButton.dataset.state = handoffState.state;
-      handoffButton.dataset.tone = handoffState.tone;
-      handoffButton.title = handoffState.detail;
-      handoffButton.setAttribute(
-        "aria-label",
-        `章后交接：${handoffState.label}。${handoffState.detail}。打开故事记忆检查器`
-      );
-    }
-  }
-
-  function renderWritingInspector(p, task, chapter, packed) {
-    if (!p) return;
-    const risks = UiShell?.continuityStats?.(p.continuityIssues || []) || { total: 0, high: 0, tone: "success" };
-    const activeIssues = (p.continuityIssues || [])
-      .filter((issue) => issue?.status === "open")
-      .sort((a, b) => ({ blocker: 0, major: 1, minor: 2, info: 3 }[a.severity] ?? 9) - ({ blocker: 0, major: 1, minor: 2, info: 3 }[b.severity] ?? 9));
-    const openLoops = (p.plotLoops || []).filter((loop) => ["open", "deferred"].includes(loop?.status));
-    const handoffState = handoffPresentation(chapter);
-    const handoff = handoffState.label;
-    const pov = task?.pov || task?.viewpoint || p.styleBible?.pov || "未设定";
-    const health = UiShell?.contextHealth?.(packed?.meta || {}, p) || { percent: 0, state: "healthy", label: "待评估" };
-    const healthLabel = !chapter
-      ? "待评估"
-      : health.state === "healthy"
-        ? health.percent
-          ? `健康 · ${health.percent}%`
-          : "健康"
-        : health.label;
-
-    const ribbonValues = {
-      ribbonTask: task?.id || "未绑定",
-      ribbonPov: pov,
-      ribbonLoops: String(openLoops.length),
-      ribbonIssues: risks.high ? `${risks.high} 高风险` : risks.total ? `${risks.total} 条提醒` : "安全",
-      ribbonHealth: healthLabel,
-    };
-    for (const [id, value] of Object.entries(ribbonValues)) {
-      const el = $(id);
-      if (el) el.textContent = value;
-    }
-    const issueButton = $("ribbonIssues")?.closest("button");
-    if (issueButton) {
-      issueButton.dataset.tone = risks.tone;
-      issueButton.setAttribute("aria-label", `连续性：${ribbonValues.ribbonIssues}，打开检查器`);
-    }
-    const healthButton = $("ribbonHealth")?.closest("button");
-    if (healthButton) {
-      healthButton.dataset.tone = health.state === "healthy" ? "success" : health.state === "blocked" ? "danger" : "warning";
-      healthButton.setAttribute("aria-label", `上下文健康：${healthLabel}，打开故事记忆检查器`);
-    }
-    renderChapterHeaderState(p, chapter, { handoff: handoffState });
-
-    if ($("continuityCount")) $("continuityCount").textContent = String(activeIssues.length);
-    const issueList = $("continuityInspector");
-    if (issueList) {
-      if (!activeIssues.length) {
-        issueList.innerHTML = `<div class="empty-state compact success-state"><span class="empty-kicker">连续性稳定</span><strong>当前没有待处理风险。</strong></div>`;
-      } else {
-        issueList.innerHTML = activeIssues
-          .map(
-            (issue) => `<article class="continuity-card severity-${escapeHtml(issue.severity || "major")}" data-issue-id="${escapeHtml(issue.id || "")}">
-              <header><span class="severity-label">${escapeHtml(issue.severity || "major")}</span><span>${escapeHtml(issue.type || "general")}</span></header>
-              <h4>${escapeHtml(issue.summary || "未命名风险")}</h4>
-              ${issue.evidence ? `<dl><div><dt>正文证据</dt><dd>${escapeHtml(issue.evidence)}</dd></div></dl>` : ""}
-              ${issue.expected ? `<dl><div><dt>Canon 证据</dt><dd>${escapeHtml(issue.expected)}</dd></div></dl>` : ""}
-              ${issue.suggestion ? `<p class="issue-suggestion"><strong>建议</strong>${escapeHtml(issue.suggestion)}</p>` : ""}
-              <footer>
-                <button type="button" class="btn ghost xs" data-issue-action="handled">已处理</button>
-                <button type="button" class="btn ghost xs" data-issue-action="ignored">忽略</button>
-                ${issue.evidence ? `<button type="button" class="btn xs" data-issue-action="repair">局部修复</button>` : ""}
-              </footer>
-            </article>`
-          )
-          .join("");
-      }
-    }
-
-    const healthBox = $("contextHealth");
-    if (healthBox) healthBox.dataset.state = health.state;
-    if ($("contextHealthLabel")) $("contextHealthLabel").textContent = health.label;
-    if ($("contextHealthBar")) $("contextHealthBar").style.width = `${health.percent}%`;
-    if ($("contextHealthGrid")) {
-      $("contextHealthGrid").innerHTML = [
-        ["预算", `${health.percent}%`],
-        ["Canon", `${health.canonCount} 条`],
-        ["RAG", health.ragLabel || `${health.ragMode} / ${health.ragHits} 命中`],
-        ["裁剪", health.truncated.length ? `${health.truncated.length} 块` : "无"],
-        ["交接", handoff],
-      ]
-        .map(([label, value]) => `<div><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
-        .join("");
-    }
-
-    const memory = $("memoryInspector");
-    if (memory) {
-      const states = Object.values(p.entityStates || {}).slice(0, 6);
-      const timeline = (p.timelineEvents || []).slice(-5).reverse();
-      const canon = (p.detailCanon?.facts || []).slice(-6);
-      memory.innerHTML = `
-        <section class="memory-section"><h4>人物状态</h4>${states.length ? `<ul>${states.map((item) => `<li><strong>${escapeHtml(item.entity || "未命名")}</strong><span>${escapeHtml(item.location || item.condition || item.status || "状态待更新")}</span></li>`).join("")}</ul>` : `<p>章后交接后显示人物状态。</p>`}</section>
-        <section class="memory-section"><h4>时间线</h4>${timeline.length ? `<ol>${timeline.map((item) => `<li><span>${escapeHtml(item.chapter || `#${item.order || "?"}`)}</span>${escapeHtml(item.event || item.time || "")}</li>`).join("")}</ol>` : `<p>尚无时间线事件。</p>`}</section>
-        <section class="memory-section"><h4>开放伏笔</h4>${openLoops.length ? `<ul>${openLoops.slice(0, 6).map((item) => `<li><strong>${escapeHtml(item.summary || "未命名伏笔")}</strong><span>${escapeHtml(item.target || "待安排回收")}</span></li>`).join("")}</ul>` : `<p>当前没有开放伏笔。</p>`}</section>
-        <section class="memory-section"><h4>相关 Canon</h4>${canon.length ? `<ul>${canon.map((item) => `<li><strong>${escapeHtml(item.key || "设定")}</strong><span>${escapeHtml(item.value || "")}</span></li>`).join("")}</ul>` : `<p>尚无锁定 Canon。</p>`}</section>`;
-    }
   }
 
   function setAutoStatus(t) {
@@ -2514,7 +1892,7 @@
           }
           await flushToDisk();
         } else {
-          if (diskSavePromise) await diskSavePromise;
+          await Persistence.waitForIdle();
           Store.saveAll(state);
         }
       } catch (e) {
@@ -2589,7 +1967,7 @@
         const result = await replaceMemoryWithDisk(cur, fresh, { intent: "discard" });
         return result.replaced ? result.project : null;
       }
-      if (diskSavePromise) await diskSavePromise;
+      await Persistence.waitForIdle();
       const flags = diskAdoptFlags(cur);
       const verdict = Vault.classifyDiskAdopt(flags);
       if (!verdict.ok) {
@@ -2654,6 +2032,10 @@
       return;
     }
     const lines = [];
+    const nameLocks = Pipe.collectAuthorNameLocks?.(p) || [];
+    if (nameLocks.length) {
+      lines.push(`【作者锁名】${nameLocks.map((x) => `${x.role === "heroine" ? "女主" : "男主"}=${x.name}`).join("、")}`);
+    }
     lines.push(`【书名候选】${(p.title_candidates || []).join(" / ") || p.title}`);
     lines.push(`【卖点】${p.pitch || "—"}`);
     lines.push(`【类型】${p.genre || ""} ${p.sub_genre || ""}`);
@@ -2682,11 +2064,29 @@
     });
   }
 
+  function refreshAuthorNameHint() {
+    const el = $("authorNameLockHint");
+    if (!el || !Pipe.collectAuthorNameLocks) return;
+    const current = project();
+    const ideaEl = $("ideaInput");
+    const noteEl = $("authorNote");
+    const p = {
+      // 控件存在时以控件为准；允许作者清空输入后提示立即消失，不回退到旧项目值。
+      ideaInput: ideaEl ? ideaEl.value : current?.ideaInput || "",
+      authorNote: noteEl ? noteEl.value : current?.authorNote || "",
+    };
+    const locks = Pipe.collectAuthorNameLocks(p);
+    el.textContent = locks.length
+      ? `将锁定人名：${locks.map((x) => `${x.role === "heroine" ? "女主" : "男主"}「${x.name}」`).join("、")}。策划不得改名。`
+      : "写上「女主沈照雪」「男主陆沉」这样的全名，策划会按原名出人，不会自行改名。";
+  }
+
   function loadPipelineView() {
     const p = project();
     $("ideaInput").value = p.ideaInput || "";
     $("authorNote").value = p.authorNote || "";
-    $("targetChapters").value = p.targetChapters || 20;
+    $("targetChapters").value = normalizedTargetChapters(p.targetChapters);
+    refreshAuthorNameHint();
     renderPlanPreview();
     renderPipeLog();
     markSteps(null);
@@ -2731,9 +2131,7 @@
     renderSpineSide();
   }
 
-  function storyLabel(value, fallback = "其他") {
-    return Records.label(value, fallback);
-  }
+  const storyLabel = Records.label;
 
   function syncStoryTypeFilter(id, values) {
     const select = $(id);
@@ -2756,14 +2154,6 @@
 
   function storyFilterValue(id) {
     return String($(id)?.value || "").trim();
-  }
-
-  function storyChapterEvidence(record, fields) {
-    return Records.evidenceText(record, fields);
-  }
-
-  function canonLockState(record) {
-    return Records.canonLockState(record);
   }
 
   function emptyState(kicker, hint, extraClass = "") {
@@ -2803,33 +2193,7 @@
       }
     );
     if (!box) return;
-    box.innerHTML = model.visible
-      .map((record) => {
-        const category = String(record.category || "other");
-        const lockState = canonLockState(record);
-        const chapter = storyChapterEvidence(record, model.evidenceFields) || "未记录";
-        if (record._recordKind === "conflict") {
-          return `<article class="story-record is-warning">
-            <header><span class="record-badge">${escapeHtml(storyLabel(category))}</span><span class="record-badge status-${escapeHtml(lockState)}">${escapeHtml(storyLabel(lockState))}</span></header>
-            <h4>${escapeHtml(record.key || "未命名设定")}</h4>
-            <p class="story-record-value"><del>${escapeHtml(record.attempted || "未知试写值")}</del><span aria-hidden="true"> → </span><strong>${escapeHtml(record.kept || "未知锁定值")}</strong></p>
-            <dl><div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div><div><dt>拒绝原因</dt><dd>${escapeHtml(record.reason || "与锁定设定不一致")}</dd></div></dl>
-          </article>`;
-        }
-        const history = Array.isArray(record.history) ? record.history : [];
-        return `<article class="story-record">
-          <header><span class="record-badge">${escapeHtml(storyLabel(category))}</span><span class="record-badge status-${escapeHtml(lockState)}">${escapeHtml(storyLabel(lockState))}</span></header>
-          <h4>${escapeHtml(record.key || "未命名设定")}</h4>
-          <p class="story-record-value">${escapeHtml(record.value || "未填写")}</p>
-          <dl>
-            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
-            ${record.entity ? `<div><dt>关联实体</dt><dd>${escapeHtml(record.entity)}</dd></div>` : ""}
-            <div><dt>正文证据</dt><dd>${escapeHtml(record.evidence || "未保存摘录")}</dd></div>
-            ${history.length ? `<div><dt>变更记录</dt><dd>${history.length} 次，最近来自 ${escapeHtml(history.at(-1)?.chapter || "未知章节")}</dd></div>` : ""}
-          </dl>
-        </article>`;
-      })
-      .join("");
+    box.innerHTML = Records.renderCanonHtml(model);
   }
 
   function renderLoopRecords(p) {
@@ -2848,23 +2212,7 @@
       }
     );
     if (!box) return;
-    box.innerHTML = model.visible
-      .map((loop) => {
-        const chapter = storyChapterEvidence(loop, model.evidenceFields) || "未记录";
-        const actionable = ["open", "deferred"].includes(loop.status);
-        return `<article class="story-record" data-record-status="${escapeHtml(loop.status)}">
-          <header><span class="record-badge">${escapeHtml(storyLabel(loop.type))}</span><span class="record-badge status-${escapeHtml(loop.status)}">${escapeHtml(storyLabel(loop.status))}</span></header>
-          <h4>${escapeHtml(loop.summary || "未命名伏笔")}</h4>
-          <dl>
-            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
-            <div><dt>正文证据</dt><dd>${escapeHtml(loop.evidence || "未保存摘录")}</dd></div>
-            <div><dt>预计回收</dt><dd>${escapeHtml(loop.target || "待安排")}</dd></div>
-            ${loop.resolutionEvidence ? `<div><dt>回收证据</dt><dd>${escapeHtml(loop.resolutionEvidence)}</dd></div>` : ""}
-          </dl>
-          ${actionable ? `<footer><button type="button" class="btn xs" data-loop-action="resolved" data-loop-index="${loop._sourceIndex}">标记已回收</button><button type="button" class="btn ghost xs" data-loop-action="deferred" data-loop-index="${loop._sourceIndex}">延后</button></footer>` : ""}
-        </article>`;
-      })
-      .join("");
+    box.innerHTML = Records.renderLoopHtml(model);
   }
 
   function renderContinuityRecords(p) {
@@ -2885,24 +2233,7 @@
       }
     );
     if (!box) return;
-    box.innerHTML = model.visible
-      .map((issue) => {
-        const chapter = storyChapterEvidence(issue, model.evidenceFields) || "未记录";
-        const severityToken = UiShell?.safeCssToken?.(issue.severity, "major") || "major";
-        return `<article class="story-record continuity-card severity-${escapeHtml(severityToken)}" data-record-status="${escapeHtml(issue.status)}">
-          <header><span class="record-badge">${escapeHtml(storyLabel(issue.type))}</span><span class="record-badge status-${escapeHtml(issue.status)}">${escapeHtml(storyLabel(issue.status))}</span><span class="severity-label">${escapeHtml(storyLabel(issue.severity))}</span></header>
-          <h4>${escapeHtml(issue.summary || "未命名风险")}</h4>
-          <dl>
-            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
-            <div><dt>正文证据</dt><dd>${escapeHtml(issue.evidence || "未保存摘录")}</dd></div>
-            <div><dt>Canon 证据</dt><dd>${escapeHtml(issue.expected || "未关联 Canon")}</dd></div>
-            <div><dt>处理建议</dt><dd>${escapeHtml(issue.suggestion || "由作者核对并决定")}</dd></div>
-            ${issue.resolution ? `<div><dt>处理记录</dt><dd>${escapeHtml(issue.resolution)}</dd></div>` : ""}
-          </dl>
-          ${issue.status === "open" ? `<footer><button type="button" class="btn xs" data-issue-action="handled" data-issue-index="${issue._sourceIndex}">已处理</button><button type="button" class="btn ghost xs" data-issue-action="ignored" data-issue-index="${issue._sourceIndex}">忽略</button></footer>` : ""}
-        </article>`;
-      })
-      .join("");
+    box.innerHTML = Records.renderContinuityHtml(model);
   }
 
   /**
@@ -2954,78 +2285,14 @@
 
   function renderSpineSide() {
     const p = project();
-    const sp = p.spine?.spine || [];
-    $("spineView").textContent =
-      sp.map((a) => `Act${a.act} ${a.name}\n  目标:${a.goal}\n  禁止:${a.forbidden || "-"}`).join("\n\n") ||
-      "尚无脊柱";
-
-    const sl = p.storyline || {};
-    const slEl = $("storylineView");
-    if (slEl) {
-      const logs = (sl.chapterLogs || []).slice(-6);
-      slEl.textContent =
-        [
-          sl.positionSummary ? `位置：${sl.positionSummary}` : "",
-          sl.lastSummary ? `上章：${sl.lastSummary}` : "",
-          sl.nextDirection ? `推进：${sl.nextDirection}` : "",
-          sl.nextTaskId ? `下一任务：${sl.nextTaskId} ${sl.nextTaskGoal || ""}` : "",
-          logs.length
-            ? "轨迹：\n" + logs.map((l) => `· #${l.order} ${l.summary || l.position || ""}`).join("\n")
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n") || "尚无故事线（写完一章并摘要后生成）";
-    }
-
+    const summary = Records.buildStorySummary(p);
+    $("spineView").textContent = summary.spineText;
+    if ($("storylineView")) $("storylineView").textContent = summary.storylineText;
+    $("memoryView").textContent = summary.memoryText;
+    if ($("entityStateView")) $("entityStateView").textContent = summary.entityStateText;
     renderCanonRecords(p);
-
-    const mem = p.memoryRoll || [];
-    const st = p.storyState || {};
-    const stateLines = [
-      st.lastChapter ? `最近章：${st.lastChapter}` : "",
-      st.protagonistState ? `主角：${st.protagonistState}` : "",
-      st.powerOrSystem ? `能力：${st.powerOrSystem}` : "",
-      st.location ? `地点：${st.location}` : "",
-      (st.openLoops || []).length ? `未收回钩子：${(st.openLoops || []).slice(0, 6).join("；")}` : "",
-      (st.establishedFacts || []).length
-        ? `已确立事实：${(st.establishedFacts || []).slice(0, 6).join("；")}`
-        : "",
-    ].filter(Boolean);
-    const memLines = mem.slice(-10).map((m) => {
-      if (typeof m === "string") return m;
-      const bits = [
-        m.summary || (m.happened || []).join("，"),
-        m.next_direction ? `向:${m.next_direction}` : "",
-        m.state ? `态:${m.state}` : "",
-        (m.open_loops || []).length ? `钩:${(m.open_loops || []).slice(0, 2).join("/")}` : "",
-      ].filter(Boolean);
-      return `· ${m.chapter || ""} ${bits.join(" | ")}`;
-    });
-    $("memoryView").textContent =
-      [
-        stateLines.length ? "【故事状态】\n" + stateLines.join("\n") : "",
-        memLines.length ? "【滚动摘要】\n" + memLines.join("\n") : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n") || "尚无滚动摘要（写章后自动生成；将注入下一章上下文）";
-
     renderLoopRecords(p);
     renderContinuityRecords(p);
-    if ($("entityStateView")) {
-      const states = Object.values(p.entityStates || {}).slice(0, 12);
-      const timeline = (p.timelineEvents || []).slice(-6);
-      $("entityStateView").textContent =
-        [
-          states.length
-            ? states.map((x) => `· ${x.entity}｜${x.location || "位置?"}｜${x.condition || x.status || "状态?"}`).join("\n")
-            : "尚无实体状态",
-          timeline.length
-            ? "时间线：\n" + timeline.map((x) => `· #${x.order || "?"} ${x.time || ""} ${x.event}`).join("\n")
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
-    }
   }
 
   function renderTasks() {
@@ -3041,7 +2308,7 @@
         const taskStatusClass = UiShell?.safeCssToken?.(taskStatus, "pending") || "pending";
         tr.innerHTML = `
           <td data-label="#">${escapeHtml(t.order || "")}</td>
-          <td data-label="状态"><span class="st ${taskStatusClass}">${escapeHtml(taskStatus)}</span></td>
+          <td data-label="状态"><span class="st ${taskStatusClass}">${escapeHtml(UiShell?.taskStatusLabel?.(taskStatus) || taskStatus)}</span></td>
           <td data-label="标题">${escapeHtml(t.chapter_title || "")}</td>
           <td data-label="目标">${escapeHtml(t.goal || "")}</td>
           <td data-label="禁止">${escapeHtml((t.must_not || []).join("；"))}</td>
@@ -3053,6 +2320,7 @@
           await writeTask(t.id);
         });
         const bDel = btn("删", () => {
+          if (guardProjectWritable("删除任务")) return;
           if (!confirm("删除该任务？")) return;
           p.tasks = p.tasks.filter((x) => x.id !== t.id);
           save();
@@ -3091,7 +2359,7 @@
   }
 
   function createManualChapter() {
-    if (guardGen("新建章节")) return null;
+    if (guardGen("新建章节") || guardProjectWritable("新建章节")) return null;
     const p = project();
     if (!p) return null;
     syncEditorToProject();
@@ -3125,38 +2393,13 @@
 
   function loadWriteView() {
     const p = project();
-    const list = $("chapterList");
-    list.innerHTML = "";
-    let total = 0;
+    const schemaReadOnly = Boolean(projectReadOnlyReason(p));
     const chapters = orderedChapters(p);
-    if (!chapters.length) {
-      const empty = document.createElement("li");
-      empty.className = "empty-state compact";
-      empty.innerHTML = `<span class="empty-kicker">还没有章节</span><strong>从新章节开始正文。</strong><button type="button" class="btn ghost" data-chapter-action="new">新建章节</button>`;
-      list.appendChild(empty);
-    }
-    chapters.forEach((c) => {
-      total += words(c.body);
-      const li = document.createElement("li");
-      const b = document.createElement("button");
-      b.type = "button";
-      const isWriting = writingChapterId && c.id === writingChapterId;
-      b.className =
-        "chap" +
-        (c.id === p.activeChapterId ? " active" : "") +
-        (isWriting ? " writing" : "");
-      const handoffLabel = c.handoffStatus === "done" ? "已交接" : c.body?.trim() && c.handoffStatus !== "done" ? "待交接" : "";
-      b.setAttribute("aria-current", c.id === p.activeChapterId ? "true" : "false");
-      b.innerHTML = `<span class="chap-title">${escapeHtml(c.title)}</span>${isWriting ? `<span class="chapter-state writing">生成中</span>` : handoffLabel ? `<span class="chapter-state ${c.handoffStatus === "done" ? "done" : "stale"}">${handoffLabel}</span>` : ""}<span class="chap-meta">${words(
-        c.body
-      )} 字</span>`;
-      if (genLocked) b.disabled = true;
-      b.addEventListener("click", (e) => {
-        e.preventDefault();
-        selectChapter(c.id);
-      });
-      li.appendChild(b);
-      list.appendChild(li);
+    const total = WritingPresenter.renderChapterList(p, chapters, {
+      writingChapterId,
+      locked: genLocked,
+      countWords: words,
+      onSelect: selectChapter,
     });
     $("totalWords").textContent = String(total);
 
@@ -3177,25 +2420,26 @@
       $("manuscript").value = "";
       $("chapterWords").textContent = "0 字";
     }
+    if ($("chapterTitle")) $("chapterTitle").readOnly = genLocked || schemaReadOnly;
+    if ($("manuscript")) $("manuscript").readOnly = genLocked || schemaReadOnly;
+    for (const id of [
+      "btnNewChapterFromWrite",
+      "btnGenerate",
+      "btnDigest",
+      "btnSaveChapter",
+      "btnRefreshBeat",
+      "composeMode",
+      "beatSceneList",
+    ]) {
+      const control = $(id);
+      if (control) control.disabled = genLocked || schemaReadOnly;
+    }
     renderWritingWelcome(p, ch);
     const task = p.tasks.find((t) => t.id === p.activeTaskId) || p.tasks.find((t) => t.id === ch?.taskId);
     renderTaskCard(task);
     const packed = packWriteContext(p, task, ch, $("instruction").value);
-    const handoffLabel = !ch?.body?.trim()
-      ? "无正文"
-      : ch.handoffStatus === "done"
-        ? "已交接"
-        : `待交接${ch.handoffError ? `：${ch.handoffError}` : ""}`;
-    const cutLabel = packed.meta.truncated?.length
-      ? `\n裁剪: ${packed.meta.truncated.map((x) => x.key).join(", ")}`
-      : "";
-    const omittedLabel = packed.meta.omitted?.length ? `\n省略: ${packed.meta.omitted.join(", ")}` : "";
-    const ragLabel = `\nRAG: ${packed.meta.rag?.mode || "—"} / ${packed.meta.rag?.hits?.length || 0} 命中`;
-    $("ctxMeter").textContent = `约 ${packed.meta.chars} / ${packed.meta.budget} 字符；${packed.meta.tokens} / ${
-      packed.meta.tokenBudget
-    } tokens\n使用块: ${packed.meta.used.join(
-      ", "
-    )}${cutLabel}${omittedLabel}${ragLabel}\n章后记忆: ${handoffLabel}`;
+    const productionSummary = window.NOVEL_PRODUCTION_ENGINE?.summary?.(ch);
+    $("ctxMeter").textContent = WriteUI.contextMeterText(packed, ch, productionSummary);
     renderWritingInspector(p, task, ch, packed);
     renderBeatPlanEditor(p, task, ch);
     updateComposerLabel();
@@ -3265,7 +2509,7 @@
     el.innerHTML = `
       <div class="task-card-head">
         <span class="task-order">${escapeHtml(task.id || "任务")}</span>
-        <span class="st ${taskStatusClass}">${escapeHtml(taskStatus)}</span>
+      <span class="st ${taskStatusClass}">${escapeHtml(UiShell?.taskStatusLabel?.(taskStatus) || taskStatus)}</span>
       </div>
       <h3>${escapeHtml(task.chapter_title || "未命名章节")}</h3>
       <dl class="task-fields">
@@ -3278,43 +2522,21 @@
       </dl>`;
   }
 
-  function graphNodeId(value) {
-    return GraphPanel.nodeId(value);
-  }
-
-  function graphForSelectedNode(graph, selectedId) {
-    return GraphPanel.subgraphForNode(graph, selectedId);
-  }
-
-  function graphChapterList(p, graph) {
-    return GraphPanel.chapterList(p, graph);
-  }
+  const graphNodeId = GraphPanel.nodeId;
+  const graphForSelectedNode = GraphPanel.subgraphForNode;
+  const graphChapterList = GraphPanel.chapterList;
 
   function renderGraphProfile(graph, selectedId) {
     const box = $("graphProfile");
     if (!box) return;
-    if (!selectedId) {
-      box.innerHTML = "<p class='muted'>从人物列表选择一人查看</p>";
-      return;
-    }
-    const profile = window.NOVEL_NARRATIVE?.buildCharacterProfile?.(
-      graph.nodes || [],
-      graph.edges || [],
-      selectedId
-    );
-    if (!profile) {
-      box.innerHTML = "<p class='muted'>筛选范围内没有该人物档案</p>";
-      return;
-    }
-    const neighbors = (profile.neighbors || [])
-      .map(
-        (neighbor) =>
-          `<li><strong>${escapeHtml(neighbor.label || "未命名")}</strong> · ${escapeHtml(neighbor.relationship || "未标注关系")} <span class="muted">${escapeHtml(neighbor.chapter || "")}</span></li>`
-      )
-      .join("");
-    box.innerHTML = `<h4>${escapeHtml(profile.label || selectedId)}</h4>
-      <p class="muted">关系度数 ${profile.degree ?? 0}${profile.sect ? ` · ${escapeHtml(profile.sect)}` : ""}${profile.chapter ? ` · 首现 ${escapeHtml(profile.chapter)}` : ""}</p>
-      <ul class="an-neigh">${neighbors || "<li class='muted'>筛选范围内没有关联人物</li>"}</ul>`;
+    const profile = selectedId
+      ? window.NOVEL_NARRATIVE?.buildCharacterProfile?.(
+          graph.nodes || [],
+          graph.edges || [],
+          selectedId
+        )
+      : null;
+    box.innerHTML = GraphPanel.renderProfileHtml(profile, selectedId);
   }
 
   function renderGraphTimeline(graph, selectedId) {
@@ -3324,31 +2546,7 @@
       window.NOVEL_NARRATIVE?.buildRelationshipTracks?.(graph.nodes || [], graph.edges || []),
       selectedId
     );
-    if (!model) {
-      box.innerHTML = "<p class='muted'>关系演化模块未加载</p>";
-      return;
-    }
-    if (model.kind === "empty") {
-      box.innerHTML = `<p class='muted'>${model.scoped ? "该人物在筛选范围内暂无关系演化证据" : "筛选范围内暂无关系演化数据"}</p>`;
-      return;
-    }
-    if (model.kind === "grouped") {
-      box.innerHTML = model.groups
-        .map((track) => {
-          const events = track.events
-            .map((entry) => `<li>${escapeHtml(entry.chapter)} · ${escapeHtml(entry.label)}</li>`)
-            .join("");
-          return `<div class="an-track"><h5>${escapeHtml(track.title)}</h5><ul>${events || "<li class='muted'>暂无证据</li>"}</ul></div>`;
-        })
-        .join("");
-      return;
-    }
-    box.innerHTML = model.groups
-      .map(
-        (track) =>
-          `<div class="an-track"><p>${escapeHtml(track.source)} → ${escapeHtml(track.target)} · ${escapeHtml(track.label)} <span class="muted">${escapeHtml(track.chapter)}</span></p></div>`
-      )
-      .join("");
+    box.innerHTML = GraphPanel.renderTracksHtml(model);
   }
 
   function loadGraphView() {
@@ -3411,29 +2609,13 @@
     const tb = $("edgeTable")?.querySelector("tbody");
     if (tb) {
       const rows = GraphPanel.buildEdgeRows(scopedGraph, filteredGraph);
-      tb.innerHTML = rows.length
-        ? rows
-            .map(
-              (row) =>
-                `<tr><td>${escapeHtml(row.source)}</td><td>${escapeHtml(row.relationship)}</td><td>${escapeHtml(row.target)}</td><td>${escapeHtml(row.evidence)}${row.occurrence > 1 ? ` ×${row.occurrence}` : ""}</td></tr>`
-            )
-            .join("")
-        : `<tr><td colspan="4" class="muted">筛选范围内暂无关系证据</td></tr>`;
+      tb.innerHTML = GraphPanel.renderEdgeRowsHtml(rows);
     }
 
     const nodeList = $("nodeList");
     if (nodeList) {
       const buttons = GraphPanel.buildNodeButtons(filteredGraph, graphSelectedNodeId, storyLabel);
-      if (!buttons.length) {
-        nodeList.innerHTML = `<p class="muted">筛选范围内暂无人物</p>`;
-      } else {
-        nodeList.innerHTML = buttons
-          .map(
-            (item) =>
-              `<button type="button" class="an-node-btn${item.active ? " active" : ""}" aria-pressed="${item.active}" data-graph-node="${escapeHtml(item.id)}">${escapeHtml(item.text)}</button>`
-          )
-          .join("");
-      }
+      nodeList.innerHTML = GraphPanel.renderNodeButtonsHtml(buttons);
     }
     renderGraphProfile(filteredGraph, graphSelectedNodeId);
     renderGraphTimeline(filteredGraph, graphSelectedNodeId);
@@ -3448,94 +2630,62 @@
     if ($("view-graph")?.classList.contains("active")) loadGraphView();
   }
 
-  async function withAbort(fn, opts = {}) {
-    if (abortCtrl) abortCtrl.abort();
-    const runToken = ++abortRunToken;
-    abortCtrl = new AbortController();
-    const signal = abortCtrl.signal;
+  function setGenerationStopControls(active) {
     for (const id of ["btnStopPipe", "btnStop", "btnStopAuto"]) {
       const control = $(id);
       if (!control) continue;
-      control.hidden = false;
-      control.disabled = false;
+      control.hidden = !active;
+      control.disabled = !active;
     }
-    /** auto 连写自管 genLock；被顶替的运行不得在 finally 里解锁或清 abortCtrl */
-    const autoOwnsLock = !!opts.autoOwnsLock;
-    const isCurrent = () => runToken === abortRunToken;
-    try {
-      await fn(signal);
-    } catch (e) {
-      if (!isCurrent()) {
-        // 后来者已接管：不要把状态栏写成「已停止」
-      } else if (e.name === "AbortError") {
-        Pipe.log(project(), "用户停止");
-        setAutoStatus("已停止");
-        setStatus("已停止", "muted");
-      } else if (e.code === "RAG_REQUIRED") {
-        const message = e.message || "严格故事记忆策略未满足，已停止生成";
-        console.warn("strict RAG blocked", e);
-        alert(message);
-        Pipe.log(project(), "严格检索阻断: " + message);
-        setStatus("故事记忆未就绪 · 已停止生成", "err");
-        setAutoStatus("严格检索阻断");
-        loadWriteView();
-      } else if (e.code === "REVISION_FAILED") {
-        const message = e.message || "修订请求未完成";
-        console.warn("draft revision failed", e);
-        alert(`修订失败，原稿已保留。\n\n${message}`);
-        Pipe.log(project(), "修订失败，原稿已保留: " + message);
-        setStatus("修订失败 · 原稿已保留", "err");
-        setAutoStatus("修订失败 · 原稿已保留");
-      } else {
-        console.error(e);
-        alert(e.message || String(e));
-        Pipe.log(project(), "错误: " + (e.message || e));
-        setStatus("失败", "err");
-        setAutoStatus("失败");
-      }
-    } finally {
-      if (!isCurrent()) return;
-      // 退出路径必须同步冲刷：最小化窗口时 rAF 不跑；save() 会把 textarea 写回正文。
-      flushActiveChapterStream();
-      abortCtrl = null;
-      // U0-2：auto 路径自己管锁与 autoRunning；此处勿在章间/中途误解
-      if (!autoOwnsLock) {
-        autoRunning = false;
-        setGenLock(false);
-      } else if (autoRunning) {
-        // 兜底：auto 回调异常未清标志
-        autoRunning = false;
-        setGenLock(false);
-      }
-      for (const id of ["btnStopPipe", "btnStop", "btnStopAuto"]) {
-        const control = $(id);
-        if (!control) continue;
-        control.disabled = true;
-        control.hidden = true;
-      }
-      if (!autoOwnsLock) save({ immediateDisk: true });
-    }
+  }
+
+  function handleWriteRunError(error, kind, failure) {
+    DiagnosticsUI.handleWriteFailure(error, kind, failure, {
+      alert,
+      console,
+      log: (message) => Pipe.log(project(), message),
+      setStatus,
+      setVaultStatus,
+      setAutoStatus,
+      refreshWrite: loadWriteView,
+    });
+  }
+
+  function withAbort(fn, opts = {}) {
+    return WriteCases.run(fn, opts, {
+      guardWritable: (label) => guardProjectWritable(label),
+      setStopControls: setGenerationStopControls,
+      onRunError: handleWriteRunError,
+      failureContext: () => DiagnosticsUI.failureContext(project()),
+      flushStream: flushActiveChapterStream,
+      setLock: setGenLock,
+      persist: () => save({ immediateDisk: true }),
+    });
   }
 
   function confirmSpineRisk(p) {
     const progressed = (p.tasks || []).filter((t) =>
-      ["done", "written", "digested", "writing"].includes(t.status)
+      ["done", "written", "digested", "writing", "complete", "completed", "finished"].includes(
+        String(t.status || "").trim().toLowerCase()
+      )
     );
     const withBody = (p.chapters || []).filter((c) => c.body?.trim()).length;
     if (!progressed.length && !withBody) return true;
     return confirm(
       `当前已有 ${progressed.length} 个进行中/完成任务、${withBody} 章正文。\n` +
-        `重跑主线/全策划将「合并」任务板：已有进度会保留，不会清空正文。\n\n仍要继续？`
+        `有进度时会保留已写章节和对应任务；尚无正文/完成任务时，待办板会按新策划刷新。\n` +
+        `若要连同人物和任务板都全新开始，请先「新建书」。\n\n仍要在这本书上继续？`
     );
   }
 
   // —— Pipeline buttons ——
   $("btnRunPlan").addEventListener("click", () => {
+    if (guardProjectWritable("运行完整策划")) return;
     const p = project();
     if (!confirmSpineRisk(p)) return;
     p.ideaInput = $("ideaInput").value;
     p.authorNote = $("authorNote").value;
-    p.targetChapters = Number($("targetChapters").value) || 20;
+    p.targetChapters = normalizedTargetChapters($("targetChapters").value);
     withAbort(async (signal) => {
       setStatus("策划中…", "busy");
       setGenLock(true, p.activeChapterId);
@@ -3562,11 +2712,12 @@
 
   function bindStep(btnId, runner, { spineRisk } = {}) {
     $(btnId).addEventListener("click", () => {
+      if (guardProjectWritable("运行策划步骤")) return;
       const p = project();
       if (spineRisk && !confirmSpineRisk(p)) return;
       p.ideaInput = $("ideaInput").value;
       p.authorNote = $("authorNote").value;
-      p.targetChapters = Number($("targetChapters").value) || 20;
+      p.targetChapters = normalizedTargetChapters($("targetChapters").value);
       withAbort(async (signal) => {
         setStatus("运行中…", "busy");
         setGenLock(true, p.activeChapterId);
@@ -3585,14 +2736,14 @@
   bindStep("btnStepCast", Pipe.runCast);
   bindStep("btnStepSpine", Pipe.runSpine, { spineRisk: true });
 
-  $("btnStopPipe").addEventListener("click", () => abortCtrl?.abort());
-  $("btnStop").addEventListener("click", () => abortCtrl?.abort());
+  $("btnStopPipe").addEventListener("click", () => WriteCases.abort());
+  $("btnStop").addEventListener("click", () => WriteCases.abort());
   $("btnStopAuto").addEventListener("click", () => {
-    autoRunning = false;
-    abortCtrl?.abort();
+    WriteCases.abort({ stopAuto: true });
   });
 
   $("btnGoControl").addEventListener("click", () => {
+    if (guardProjectWritable("初始化故事锁定")) return;
     const p = project();
     if (!p.locks.logline) p.locks.logline = p.spine?.logline || p.pitch || "";
     save();
@@ -3600,6 +2751,7 @@
   });
 
   $("btnSaveLocks").addEventListener("click", () => {
+    if (guardProjectWritable("保存故事锁定")) return;
     const p = project();
     p.locks.logline = $("lockLogline").value.trim();
     p.locks.forbidden = $("lockForbidden").value.split(/\n+/).map((s) => s.trim()).filter(Boolean);
@@ -3629,6 +2781,7 @@
   });
 
   $("btnSteer").addEventListener("click", () => {
+    if (guardProjectWritable("执行作者纠偏")) return;
     const note = $("steerNote").value.trim();
     if (!note) return alert("请先写批注");
     withAbort(async (signal) => {
@@ -3645,6 +2798,7 @@
   });
 
   $("btnAddTask").addEventListener("click", () => {
+    if (guardProjectWritable("新增任务")) return;
     const p = project();
     const order = (p.tasks?.length || 0) + 1;
     const t = {
@@ -3694,6 +2848,7 @@
   });
 
   $("btnSaveTask").addEventListener("click", () => {
+    if (guardProjectWritable("保存任务")) return;
     const t = project().tasks.find((x) => x.id === editingTaskId);
     if (!t) return;
     t.chapter_title = $("tmTitle").value.trim();
@@ -3752,47 +2907,62 @@
     });
   }
 
-  async function writeTask(taskId) {
+  function addWritingFileHints(chapter) {
+    if (!window.__mogaoGen || !chapter?.title) return;
+    const extra = buildWritingFileHints(chapter.id);
+    window.__mogaoGen.writingFileHints = [
+      ...new Set([...(window.__mogaoGen.writingFileHints || []), ...extra]),
+    ];
+  }
+
+  function writeUseCasePorts() {
+    return {
+      status: setStatus,
+      autoStatus: setAutoStatus,
+      chapterStatus: setChapterCycleStatus,
+      setLock: setGenLock,
+      addWritingHints: addWritingFileHints,
+      syncBeatPlan: syncBeatPlanFromUi,
+      onDelta: paintActiveChapterStream,
+      flushStream: flushActiveChapterStream,
+      captureReview: captureComposerSnapshot,
+      renderWrite: loadWriteView,
+      renderControl: loadControlView,
+      showReview: showComposerReview,
+    };
+  }
+
+  function writeTask(taskId) {
     const p = project();
-    const task = p.tasks.find((t) => t.id === taskId);
-    if (!task) return;
-    await withAbort(async (signal) => {
-      setStatus("装配写作记忆…", "busy");
-      setAutoStatus(`写 ${task.id}`);
-      const ch0 = Pipe.ensureChapterForTask(p, task);
-      const reviewSnapshot = captureComposerSnapshot(p, ch0, "task");
-      setGenLock(true, ch0.id);
-      // 写入可能的章节文件提示（生成中工作区高亮）
-      if (window.__mogaoGen && ch0.title) {
-        const extra = buildWritingFileHints(ch0.id);
-        window.__mogaoGen.writingFileHints = [
-          ...new Set([...(window.__mogaoGen.writingFileHints || []), ...extra]),
-        ];
-      }
-      try {
-        syncBeatPlanFromUi(ch0);
-        await Pipe.autoChapterCycle(p, cfg, task, {
+    const task = p.tasks.find((item) => item.id === taskId);
+    if (!task) return Promise.resolve();
+    return withAbort((signal) =>
+      WriteCases.writeTask(
+        {
+          project: p,
+          cfg,
+          task,
           signal,
-          onDelta: paintActiveChapterStream,
-          onStatus: (s) => setChapterCycleStatus(task.id, s),
           instruction: $("instruction")?.value || "",
-        });
-        flushActiveChapterStream();
-        await flushProject(p);
-        setStatus("本章完成", "");
-        setAutoStatus("空闲");
-      } finally {
-        flushActiveChapterStream();
-        setGenLock(false);
-      }
-      loadWriteView();
-      loadControlView();
-      showComposerReview(reviewSnapshot, ch0, {
-        canUndo: false,
-        note: "已完成审查与章后交接",
-        undoReason: "本章结果已更新故事记忆；请通过章节历史或快照回退完整状态",
-      });
-    });
+        },
+        {
+          ...writeUseCasePorts(),
+          taskOutcome: ({ chapter, pending }) => {
+            if (pending) {
+              const pendingState = handoffPresentation(chapter);
+              setStatus(
+                `正文验收通过 · ${pendingState.label}`,
+                pendingState.tone === "danger" ? "err" : "warn"
+              );
+              setAutoStatus("待章后交接");
+            } else {
+              setStatus("本章完成", "");
+              setAutoStatus("空闲");
+            }
+          },
+        }
+      )
+    );
   }
 
   $("btnAutoWrite").addEventListener("click", () => {
@@ -3800,74 +2970,36 @@
     if (!p.locks?.logline && !p.spine?.logline) {
       if (!confirm("尚未锁定主线，仍要自动连写吗？建议先保存锁定。")) return;
     }
-    autoRunning = true;
-    // U0-2：auto 自管锁；withAbort finally 不中途解锁
-    withAbort(async (signal) => {
-      const pending = (p.tasks || [])
-        .slice()
-        .sort((a, b) => (a.order || 0) - (b.order || 0))
-        .filter((t) => t.status !== "done");
-      if (!pending.length) {
-        alert("没有未完成任务（status ≠ done）。\n若卡在 written/digested，再点一次将只补摘要/关系，不会重写正文。");
-        autoRunning = false;
-        return;
-      }
-      switchMode("write");
-      const firstCh = Pipe.ensureChapterForTask(p, pending[0]);
-      // 循环开始即全程锁；章间只更新 writingChapterId / hints
-      setGenLock(true, firstCh.id);
-      try {
-        for (const task of pending) {
-          if (!autoRunning) break;
-          setAutoStatus(`自动：${task.id} (${task.status || "pending"})`);
-          const ch0 = Pipe.ensureChapterForTask(p, task);
-          // 章间：保持 lock，仅切换写作章与文件提示
-          setGenLock(true, ch0.id);
-          if (window.__mogaoGen && ch0.title) {
-            const extra = buildWritingFileHints(ch0.id);
-            window.__mogaoGen.writingFileHints = [
-              ...new Set([...(window.__mogaoGen.writingFileHints || []), ...extra]),
-            ];
+    withAbort(
+      (signal) =>
+        WriteCases.autoWrite(
+          {
+            project: p,
+            cfg,
+            signal,
+            instruction: $("instruction")?.value?.trim() || "",
+          },
+          {
+            ...writeUseCasePorts(),
+            switchToWrite: () => switchMode("write"),
+            noPending: () =>
+              alert("没有未完成任务（status ≠ done）。\n若卡在 written/digested，再点一次将只补摘要/关系，不会重写正文。"),
+            taskError: (task, error) => {
+              setAutoStatus(`${task.id} 失败，已停止连写`);
+              alert(`任务 ${task.id} 失败：${error.message || error}\n状态保留为 ${task.status}，可稍后重试（不会重复覆盖已写正文）。`);
+            },
+            persistError: (task, error) => {
+              console.error(error);
+              setVaultStatus("连写存盘失败: " + (error.message || error), "err");
+              setAutoStatus(`${task.id} 存盘失败，已停止连写`);
+            },
+            autoComplete: () => {
+              $("btnStopAuto").disabled = true;
+            },
           }
-          try {
-            setStatus("装配写作记忆…", "busy");
-            syncBeatPlanFromUi(ch0);
-            await Pipe.autoChapterCycle(p, cfg, task, {
-              signal,
-              onDelta: paintActiveChapterStream,
-              onStatus: (s) => setChapterCycleStatus(task.id, s),
-              instruction: $("instruction")?.value?.trim() || "",
-            });
-            flushActiveChapterStream();
-          } catch (e) {
-            flushActiveChapterStream();
-            if (e.name === "AbortError") throw e;
-            // 单章失败：保留状态，停下更安全
-            setAutoStatus(`${task.id} 失败，已停止连写`);
-            alert(`任务 ${task.id} 失败：${e.message || e}\n状态保留为 ${task.status}，可稍后重试（不会重复覆盖已写正文）。`);
-            break;
-          }
-          // 落盘绑定闭包 p，不经 project()/save()
-          try {
-            await flushProject(p);
-          } catch (fe) {
-            console.error(fe);
-            setVaultStatus("连写存盘失败: " + (fe.message || fe), "err");
-            setAutoStatus(`${task.id} 存盘失败，已停止连写`);
-            throw new Error(`任务 ${task.id} 已生成但未能安全存盘：${fe.message || fe}`);
-          }
-          loadWriteView();
-          loadControlView();
-          await new Promise((r) => setTimeout(r, cfg.autoChapterDelayMs || 800));
-        }
-      } finally {
-        // 整段结束再解锁
-        autoRunning = false;
-        setGenLock(false);
-      }
-      setAutoStatus("连写结束");
-      $("btnStopAuto").disabled = true;
-    }, { autoOwnsLock: true });
+        ),
+      { autoOwnsLock: true }
+    );
   });
 
   $("btnWriteTask").addEventListener("click", () => {
@@ -3879,248 +3011,185 @@
 
   function reviseFromAnnotation() {
     const p = project();
-    const ch = p?.chapters?.find((chapter) => chapter.id === p.activeChapterId);
-    const ta = $("manuscript");
+    const chapter = p?.chapters?.find((item) => item.id === p.activeChapterId);
+    const editor = $("manuscript");
     const annotation = $("instruction")?.value?.trim() || "";
-    if (!ch || !ta?.value?.trim()) return alert("请先选择一章有正文的章节");
+    if (!chapter || !editor?.value?.trim()) return alert("请先选择一章有正文的章节");
     if (!annotation) {
       $("instruction")?.focus();
       return alert("请先在 AI 写作指令中写下本轮批注");
     }
-    const task = p.tasks.find((item) => item.id === ch.taskId || item.id === p.activeTaskId) || {
-      id: `annotation_${ch.id}`,
-      order: ch.order || 0,
-      chapter_title: ch.title || "当前章节",
-      goal: "根据作者批注修订当前章节",
-      beats: [],
-      must_include: [],
-      must_not: p.locks?.forbidden || [],
-    };
-    const originalBody = ta.value;
-    const originalUpdatedAt = ch.updatedAt;
-    const reviewSnapshot = captureComposerSnapshot(p, ch, "annotate");
-
-    withAbort(async (signal) => {
-      setStatus("请求模型并根据批注修订…", "busy");
-      setGenLock(true, ch.id);
-      try {
-        syncBeatPlanFromUi(ch);
-        await Pipe.reviseChapter(p, cfg, task, ch, {
+    const originalBody = editor.value;
+    withAbort((signal) =>
+      WriteCases.revise(
+        {
+          project: p,
+          cfg,
+          chapter,
           signal,
           annotation,
           originalBody,
-        });
-        ta.value = ch.body || "";
-        $("chapterWords").textContent = `${words(ch.body)} 字`;
-        const reviseHandoff = handoffStatusSuffix(ch, "待重新交接");
-        setStatus(`修订完成 · ${reviseHandoff.suffix}`, reviseHandoff.kind);
-        save({ immediateDisk: true });
-        loadWriteView();
-        showComposerReview(reviewSnapshot, ch, {
-          canUndo: ch.handoffStatus !== "done",
-          note: ch.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
-          undoReason:
-            ch.handoffStatus === "done"
-              ? "修订结果已更新故事记忆；请通过章节历史或快照回退完整状态"
-              : undefined,
-        });
-      } catch (error) {
-        ch.body = originalBody;
-        ch.updatedAt = originalUpdatedAt;
-        ta.value = originalBody;
-        $("chapterWords").textContent = `${words(originalBody)} 字`;
-        if (error?.name !== "AbortError") error.code = "REVISION_FAILED";
-        throw error;
-      } finally {
-        setGenLock(false);
-      }
-    });
+          originalUpdatedAt: chapter.updatedAt,
+        },
+        {
+          ...writeUseCasePorts(),
+          afterRevision: ({ chapter: revised, snapshot }) => {
+            editor.value = revised.body || "";
+            $("chapterWords").textContent = `${words(revised.body)} 字`;
+            const handoff = handoffStatusSuffix(revised, "待重新交接");
+            setStatus(`修订完成 · ${handoff.suffix}`, handoff.kind);
+            save({ immediateDisk: true });
+            loadWriteView();
+            showComposerReview(snapshot, revised, {
+              canUndo: revised.handoffStatus !== "done",
+              note: revised.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
+              undoReason:
+                revised.handoffStatus === "done"
+                  ? "修订结果已更新故事记忆；请通过章节历史或快照回退完整状态"
+                  : undefined,
+            });
+          },
+          rollbackRevision: (_chapter, body) => {
+            editor.value = body;
+            $("chapterWords").textContent = `${words(body)} 字`;
+          },
+        }
+      )
+    );
   }
 
   $("btnGenerate").addEventListener("click", () => {
     const p = project();
-    let task = p.tasks.find((t) => t.id === p.activeTaskId);
+    const task = p.tasks.find((item) => item.id === p.activeTaskId);
     const composeMode = $("composeMode")?.value || "task";
-    if (composeMode === "rewrite") {
-      $("btnRewriteSel")?.click();
-      return;
-    }
-    if (composeMode === "annotate") {
-      reviseFromAnnotation();
-      return;
-    }
-    if (composeMode === "task" && task) {
-      writeTask(task.id);
-      return;
-    }
-    if (!task) {
-      task = {
-        id: "manual",
-        chapter_title: $("chapterTitle").value,
-        goal: "按作者指令续写",
-        beats: [],
-        must_include: [],
-        must_not: p.locks?.forbidden || [],
-        hook_end: "",
-      };
-    }
-    withAbort(async (signal) => {
-      setStatus("装配写作记忆…", "busy");
-      let ch = p.chapters.find((c) => c.id === p.activeChapterId);
-      if (!ch) {
-        ch = {
-          id: Store.uid(),
-          taskId: task.id !== "manual" ? task.id : null,
-          title: $("chapterTitle").value.trim() || task.chapter_title || "新章节",
-          order: (p.chapters?.length || 0) + 1,
-          body: "",
-          updatedAt: Date.now(),
-        };
-        p.chapters = p.chapters || [];
-        p.chapters.push(ch);
-        p.activeChapterId = ch.id;
-      }
-      ch.body = $("manuscript").value;
-      ch.title = $("chapterTitle").value.trim() || ch.title;
-      const authorInstruction = $("instruction").value || "请续写，保持文风，完成任务约束。";
-      if (task.id === "manual") {
-        task = {
-          ...task,
-          id: `manual_${ch.id}`,
-          order: ch.order || (p.chapters?.length || 1),
-          chapter_title: ch.title,
-          goal: authorInstruction,
-        };
-      }
-      const reviewSnapshot = captureComposerSnapshot(p, ch, "continue");
-      setGenLock(true, ch.id);
-      try {
-        syncBeatPlanFromUi(ch);
-        await Pipe.continueChapter(p, cfg, task, {
+    if (composeMode === "rewrite") return $("btnRewriteSel")?.click();
+    if (composeMode === "annotate") return reviseFromAnnotation();
+    if (composeMode === "task" && task) return writeTask(task.id);
+    const instruction = $("instruction").value || "请续写，保持文风，完成任务约束。";
+    withAbort((signal) =>
+      WriteCases.continueDraft(
+        {
+          project: p,
+          cfg,
+          task,
           signal,
-          instruction: authorInstruction,
-          onDelta: paintActiveChapterStream,
-          onStatus: (s) => setChapterCycleStatus("手动生成", s),
-        });
-        flushActiveChapterStream();
-        const writeHandoff = handoffStatusSuffix(ch, "待章后交接");
-        if (writeHandoff.suffix === "记忆已交接") {
-          setStatus("完成 · 记忆已交接", "");
-          setAutoStatus("空闲");
-        } else {
-          setStatus(`正文已生成 · ${writeHandoff.suffix}`, writeHandoff.kind);
+          chapterTitle: $("chapterTitle").value,
+          body: $("manuscript").value,
+          instruction,
+        },
+        {
+          ...writeUseCasePorts(),
+          afterContinue: ({ chapter, snapshot }) => {
+            const handoff = handoffStatusSuffix(chapter, "待章后交接");
+            if (handoff.suffix === "记忆已交接") {
+              setStatus("完成 · 记忆已交接", "");
+              setAutoStatus("空闲");
+            } else {
+              setStatus(`正文已生成 · ${handoff.suffix}`, handoff.kind);
+            }
+            save({ immediateDisk: true });
+            loadWriteView();
+            showComposerReview(snapshot, chapter, {
+              canUndo: chapter.handoffStatus !== "done",
+              note: chapter.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
+              undoReason:
+                chapter.handoffStatus === "done"
+                  ? "续写结果已更新故事记忆；请通过章节历史或快照回退完整状态"
+                  : undefined,
+            });
+          },
         }
-        save({ immediateDisk: true });
-        loadWriteView();
-        showComposerReview(reviewSnapshot, ch, {
-          canUndo: ch.handoffStatus !== "done",
-          note: ch.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
-          undoReason:
-            ch.handoffStatus === "done"
-              ? "续写结果已更新故事记忆；请通过章节历史或快照回退完整状态"
-              : undefined,
-        });
-      } finally {
-        flushActiveChapterStream();
-        setGenLock(false);
-      }
-    });
+      )
+    );
   });
 
   $("btnRewriteSel").addEventListener("click", () => {
-    const ta = $("manuscript");
-    const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-    if (!sel) return alert("请先选中要重写的段落");
-    const authorInstruction = $("instruction")?.value?.trim() || "保持剧情走向与人物声线，改善表达和节奏";
-    // 只在模型完整返回后替换选区，失败或停止时原稿保持不变。
-    const p = project();
-    const ch = p.chapters.find((c) => c.id === p.activeChapterId);
-    const reviewSnapshot = captureComposerSnapshot(p, ch, "rewrite");
-    const task = p.tasks.find((t) => t.id === p.activeTaskId) || {
+    const editor = $("manuscript");
+    if (editor.selectionStart === editor.selectionEnd) return alert("请先选中要重写的段落");
+    const projectState = project();
+    const chapter = projectState.chapters.find((item) => item.id === projectState.activeChapterId);
+    const task = projectState.tasks.find((item) => item.id === projectState.activeTaskId) || {
       goal: "重写选段",
-      must_not: p.locks?.forbidden || [],
+      must_not: projectState.locks?.forbidden || [],
       beats: [],
       must_include: [],
     };
-    withAbort(async (signal) => {
-      setStatus("重写中…", "busy");
-      setGenLock(true, ch?.id || p.activeChapterId);
-      try {
-        const start = ta.selectionStart;
-        const end = ta.selectionEnd;
-        const originalBody = ta.value;
-        const before = originalBody.slice(0, start);
-        const after = originalBody.slice(end);
-        syncBeatPlanFromUi(ch);
-        await Pipe.rewritePassage(p, cfg, task, ch, {
+    const instruction = $("instruction")?.value?.trim() || "保持剧情走向与人物声线，改善表达和节奏";
+    withAbort((signal) =>
+      WriteCases.rewriteSelection(
+        {
+          project: projectState,
+          cfg,
+          task,
+          chapter,
           signal,
-          selection: sel,
-          before,
-          after,
-          instruction: authorInstruction,
-        });
-        ta.value = ch.body || "";
-        const rewriteHandoff = handoffStatusSuffix(ch, "待章后交接");
-        setStatus(`重写完成 · ${rewriteHandoff.suffix}`, rewriteHandoff.kind);
-        save();
-        showComposerReview(reviewSnapshot, ch, {
-          canUndo: ch.handoffStatus !== "done",
-          note: ch.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
-          undoReason:
-            ch.handoffStatus === "done"
-              ? "重写结果已更新故事记忆；请通过章节历史或快照回退完整状态"
-              : undefined,
-        });
-      } catch (error) {
-        if (error?.name !== "AbortError") error.code = "REVISION_FAILED";
-        throw error;
-      } finally {
-        setGenLock(false);
-      }
-    });
+          body: editor.value,
+          start: editor.selectionStart,
+          end: editor.selectionEnd,
+          instruction,
+        },
+        {
+          ...writeUseCasePorts(),
+          afterRewrite: ({ chapter: revised, snapshot }) => {
+            editor.value = revised.body || "";
+            const handoff = handoffStatusSuffix(revised, "待章后交接");
+            setStatus(`重写完成 · ${handoff.suffix}`, handoff.kind);
+            save();
+            showComposerReview(snapshot, revised, {
+              canUndo: revised.handoffStatus !== "done",
+              note: revised.handoffStatus === "done" ? "已完成章后交接" : "待章后交接",
+              undoReason:
+                revised.handoffStatus === "done"
+                  ? "重写结果已更新故事记忆；请通过章节历史或快照回退完整状态"
+                  : undefined,
+            });
+          },
+        }
+      )
+    );
   });
 
   $("btnDigest").addEventListener("click", () => {
     const p = project();
-    const ch = p.chapters.find((c) => c.id === p.activeChapterId);
-    const task = p.tasks.find((t) => t.id === ch?.taskId || t.id === p.activeTaskId);
-    if (!ch?.body?.trim()) return alert("本章无正文");
+    const chapter = p.chapters.find((item) => item.id === p.activeChapterId);
+    const task = p.tasks.find((item) => item.id === chapter?.taskId || item.id === p.activeTaskId);
+    if (!chapter?.body?.trim() && !$("manuscript").value.trim()) return alert("本章无正文");
     if ($("chapterMore")) $("chapterMore").open = false;
-    withAbort(async (signal) => {
-      try {
-        setGenLock(true, ch.id);
-        setStatus("摘要+关系…", "busy");
-        ch.body = $("manuscript").value;
-        const handoffTask =
-          task ||
-          ({
-            id: `manual_${ch.id}`,
-            order: ch.order || 0,
-            chapter_title: ch.title || "",
-            goal: "根据当前正文更新长期记忆",
-          });
-        await Pipe.handoffChapter(p, cfg, ch, handoffTask, {
+    withAbort((signal) =>
+      WriteCases.handoffExisting(
+        {
+          project: p,
+          cfg,
+          chapter,
+          task,
           signal,
-          onStatus: (s) => setChapterCycleStatus("章后交接", s),
-        });
-        setStatus("完成 · 记忆已交接", "");
-        save();
-        loadControlView();
-        loadGraphView();
-      } finally {
-        loadWriteView();
-      }
-    });
+          editorBody: $("manuscript").value,
+          instruction: $("instruction")?.value || "",
+        },
+        {
+          ...writeUseCasePorts(),
+          invalidateAfterAuthorEdit: (item, linkedTask) =>
+            invalidateProductionAfterAuthorEdit(item, linkedTask),
+          afterHandoff: () => {
+            setStatus("完成 · 记忆已交接", "");
+            save();
+            loadControlView();
+            loadGraphView();
+          },
+          finalizeHandoff: loadWriteView,
+        }
+      )
+    );
   });
 
   function saveActiveChapterNow() {
-    if (guardGen("保存")) return;
+    if (guardGen("保存") || guardProjectWritable("保存章节")) return;
     const p = project();
     syncEditorToProject();
     scheduleDiskSave(true);
     setVaultStatus(
-      vaultOnline && p?.slug ? "手动存盘…" : "已保存到浏览器缓存 · 本地书库未连接",
-      vaultOnline && p?.slug ? "busy" : "warn"
+      vaultOnline ? "手动存盘…" : "已保存到浏览器缓存 · 本地书库未连接",
+      vaultOnline ? "busy" : "warn"
     );
     renderChapterHeaderState(p, p?.chapters?.find((chapter) => chapter.id === p.activeChapterId));
   }
@@ -4200,6 +3269,39 @@
     captureWritingPosition(false);
   }
 
+  function productionIsBlocked(chapter) {
+    return (
+      ProductionState?.isQualityBlocked?.(chapter) ??
+      ["needs_revision", "quality-blocked"].includes(
+        String(chapter?.production?.status || chapter?.production?.stage || "")
+      )
+    );
+  }
+
+  function alignTaskAfterBodyMutation(task, chapter, reason) {
+    if (productionIsBlocked(chapter)) {
+      ChapterState.requestRevision(chapter, task, {
+        reason: reason || chapter?.handoffError || "正文变化后等待重新验收",
+        stage: chapter?.production?.stage || "quality-review",
+        touch: false,
+      });
+      return;
+    }
+    ChapterState.markHandoffStale(chapter, task, {
+      reason: reason || chapter?.handoffError || "正文变化后等待重新交接",
+      touch: false,
+    });
+  }
+
+  function invalidateProductionAfterAuthorEdit(
+    chapter,
+    task,
+    reason = "正文编辑后等待重新通过叙事质量闸门"
+  ) {
+    if (!chapter) return { changed: false, reason: "missing-chapter" };
+    return ProductionState.invalidateAfterBodyEdit(chapter, { reason, task });
+  }
+
   $("manuscript")?.addEventListener("select", syncComposerSelection);
   $("manuscript")?.addEventListener("keyup", syncComposerSelection);
   $("manuscript")?.addEventListener("click", syncComposerSelection);
@@ -4216,10 +3318,8 @@
       }
       ch.body = $("manuscript").value;
       ch.updatedAt = Date.now();
-      ch.handoffStatus = "stale";
-      ch.handoffError = "正文编辑后尚未重新交接";
       const linkedTask = p.tasks.find((t) => t.id === ch.taskId);
-      if (linkedTask && linkedTask.status === "done") linkedTask.status = "written";
+      invalidateProductionAfterAuthorEdit(ch, linkedTask);
       scheduleCraftRescore(ch.id);
     }
     markDirty();
@@ -4233,10 +3333,8 @@
       const t = $("chapterTitle").value.trim();
       if (t) ch.title = t;
       ch.updatedAt = Date.now();
-      ch.handoffStatus = "stale";
-      ch.handoffError = "章节标题编辑后尚未重新交接";
       const linkedTask = p.tasks.find((task) => task.id === ch.taskId);
-      if (linkedTask && linkedTask.status === "done") linkedTask.status = "written";
+      ChapterState.markHandoffStale(ch, linkedTask, { reason: "章节标题编辑后尚未重新交接" });
     }
     markDirty();
     scheduleDiskSave(false);
@@ -4266,6 +3364,8 @@
     "authorNote",
     "graphJson",
   ];
+  $("ideaInput")?.addEventListener("input", refreshAuthorNameHint);
+  $("authorNote")?.addEventListener("input", refreshAuthorNameHint);
   function bindProjectFormPersistence() {
     for (const id of PROJECT_FORM_FIELDS) {
       const el = $(id);
@@ -4385,7 +3485,7 @@
   $("btnCloseInspector")?.addEventListener("click", () => setInspectorDrawer(false));
   $("btnFocusMode")?.addEventListener("click", () => setFocusMode(!document.body.classList.contains("focus-mode"), true));
   $("vaultStatus")?.addEventListener("click", () => {
-    if (saveConflictQueue.length) {
+    if (SaveConflicts.list().length) {
       openNextSaveConflict();
       return;
     }
@@ -4473,39 +3573,19 @@
       const chapter = p.chapters.find((item) => item.id === p.activeChapterId);
       const task = p.tasks.find((item) => item.id === chapter?.taskId || item.id === p.activeTaskId);
       if (!chapter?.body?.trim()) return alert("本章没有可修复的正文");
-      withAbort(async (signal) => {
-        setGenLock(true, chapter.id);
-        setStatus("正在执行精确局部修复…", "busy");
-        const result = await Pipe.repairChapterContinuity(
-          p,
-          cfg,
-          chapter,
-          task || {},
-          { issues: [issue] },
-          { signal, onStatus: (s) => setChapterCycleStatus("局部修复", s) }
-        );
-        if (!result?.applied) throw new Error("未找到唯一可安全替换的片段，正文保持不变");
-        issue.status = "handled";
-        issue.resolution = "已执行精确局部修复";
-        issue.updatedAt = Date.now();
-        if (cfg.manualAutoHandoff !== false) {
-          try {
-            await Pipe.handoffChapter(p, cfg, chapter, task || {}, {
-              signal,
-              onStatus: (s) => setChapterCycleStatus("局部修复交接", s),
-            });
-            setStatus("局部修复完成 · 记忆已交接", "");
-          } catch (error) {
-            if (error?.name === "AbortError") throw error;
-            const repairHandoff = handoffStatusSuffix(chapter, "待重新交接");
-            setStatus(`局部修复完成 · ${repairHandoff.suffix}`, repairHandoff.kind);
+      withAbort((signal) =>
+        WriteCases.repairIssue(
+          { project: p, cfg, chapter, task, issue, signal },
+          {
+            ...writeUseCasePorts(),
+            repairOutcome: ({ chapter: repaired, handedOff }) => {
+              if (handedOff) return setStatus("局部修复完成 · 记忆已交接", "");
+              const handoff = handoffStatusSuffix(repaired, "待重新交接");
+              setStatus(`局部修复完成 · ${handoff.suffix}`, handoff.kind);
+            },
           }
-        } else {
-          setStatus("局部修复完成 · 待重新交接", "warn");
-        }
-        loadWriteView();
-        loadControlView();
-      });
+        )
+      );
     }
   });
 
@@ -4691,34 +3771,12 @@
     }
   });
 
-  function buildExportMarkdown(p) {
-    const lines = [`# ${p.title}`, "", `> ${p.pitch || ""}`, ""];
-    lines.push(`> 本地路径: vault/books/${p.slug || "(未建夹)"}`, "");
-    lines.push("## 锁定主线", p.locks?.logline || "", "");
-    lines.push("## 禁区", (p.locks?.forbidden || []).map((x) => `- ${x}`).join("\n"), "");
-    lines.push("## 人物", p.cast_summary || "", "");
-    lines.push("## 关系 JSON", "```json", JSON.stringify(p.graph, null, 2), "```", "");
-    lines.push("## 滚动摘要");
-    (p.memoryRoll || []).forEach((m) => {
-      if (typeof m === "string") lines.push("- " + m);
-      else lines.push(`- ${m.chapter}: ${(m.happened || []).join("，")}`);
-    });
-    lines.push("", "## 正文", "");
-    const chs = (p.chapters || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-    if (!chs.length) lines.push("_（尚无章节正文）_");
-    chs.forEach((c) => {
-      lines.push(`### ${c.title}`, "", c.body || "（空）", "");
-    });
-    return lines.join("\n");
-  }
-
   function downloadMarkdown(p) {
-    const blob = new Blob([buildExportMarkdown(p)], { type: "text/markdown;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${p.title || "novel"}-全书.md`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    DiagnosticsUI.downloadText(
+      PersistenceFactory.buildExportMarkdown(p),
+      `${p.title || "novel"}-全书.md`,
+      "text/markdown;charset=utf-8"
+    );
   }
 
   $("btnExport").addEventListener("click", async () => {
@@ -4746,6 +3804,15 @@
     if (mode === "2" || mode === "3" || ((mode === "1" || mode === "3") && !vaultOnline)) {
       downloadMarkdown(p);
     }
+  });
+
+  DiagnosticsUI.bindDiagnosticsExport({
+    button: $("btnExportDiagnostics"),
+    getProject: project,
+    syncEditor: syncEditorToProject,
+    setStatus,
+    meta: $("cfgDiagnosticsMeta"),
+    alert,
   });
 
   $("btnOpenVault")?.addEventListener("click", async () => {
@@ -4858,6 +3925,8 @@
     if ($("cfgPrevTail")) $("cfgPrevTail").value = cfg.prevChapterTailChars || window.NOVEL_DEFAULTS?.prevChapterTailChars || 1800;
     if ($("cfgMemDepth")) $("cfgMemDepth").value = cfg.memoryDepth || window.NOVEL_DEFAULTS?.memoryDepth || 12;
     if ($("cfgHarness")) $("cfgHarness").checked = cfg.harnessEnabled !== false;
+    if ($("cfgProduction")) $("cfgProduction").checked = cfg.productionEngineEnabled !== false;
+    if ($("cfgQualityGate")) $("cfgQualityGate").value = cfg.productionQualityPolicy === "warn" ? "warn" : "strict";
     if ($("cfgManualHandoff")) $("cfgManualHandoff").checked = cfg.manualAutoHandoff !== false;
     if ($("cfgContinuityReview")) $("cfgContinuityReview").checked = cfg.continuityReviewEnabled !== false;
     if ($("cfgContinuityRepair")) $("cfgContinuityRepair").checked = cfg.continuityAutoRepair !== false;
@@ -4945,6 +4014,8 @@
       cfg.memoryDepth = Number($("cfgMemDepth").value) || window.NOVEL_DEFAULTS?.memoryDepth || 12;
     }
     if ($("cfgHarness")) cfg.harnessEnabled = !!$("cfgHarness").checked;
+    if ($("cfgProduction")) cfg.productionEngineEnabled = !!$("cfgProduction").checked;
+    if ($("cfgQualityGate")) cfg.productionQualityPolicy = $("cfgQualityGate").value === "warn" ? "warn" : "strict";
     if ($("cfgManualHandoff")) cfg.manualAutoHandoff = !!$("cfgManualHandoff").checked;
     if ($("cfgContinuityReview")) cfg.continuityReviewEnabled = !!$("cfgContinuityReview").checked;
     if ($("cfgContinuityRepair")) cfg.continuityAutoRepair = !!$("cfgContinuityRepair").checked;
@@ -5009,6 +4080,8 @@
         baseUrl: cfg.baseUrl,
         apiKey: cfg.apiKey,
         model: cfg.model,
+        temperature: cfg.temperature,
+        seed: cfg.seed,
         stream: false,
         messages: [{ role: "user", content: "只回：连接成功" }],
       });
@@ -5171,6 +4244,7 @@
           state = cached;
           const filtered = filterMigrateProjects(cached.projects || []);
           if (!filtered.ok) {
+            state = { projects: [], activeId: null };
             setVaultStatus("书库为空 · 缓存无可用正文（已跳过迁入）", "warn");
           } else {
             setVaultStatus("书库为空 · 可迁入浏览器缓存", "warn");
@@ -5232,6 +4306,7 @@
 
     // 初始化 Obsidian 风格工作区
     Ws?.init?.({
+      getProjectReadOnlyReason: () => projectReadOnlyReason(project()),
       onStatus: (msg, kind) => {
         if (kind === "err") setVaultStatus(msg, "err");
         else if (kind === "ok" && msg) setVaultStatus(msg, "ok");
@@ -5252,14 +4327,14 @@
             return;
           }
           if (isWriteViewActive()) syncEditorToProject();
-          // 存盘过程中的资料回写不能 await diskSavePromise，否则会跟 flushToDisk 互相等待。
+          // 存盘过程中的资料回写不能等待 Persistence，否则会跟 flushToDisk 互相等待。
           const verdict = Vault.classifyDiskAdopt(diskAdoptFlags(cur));
           if (verdict.ok) {
             await reloadActiveBookFromDisk({ silent: true });
             if (isWriteViewActive()) loadWriteView();
             return;
           }
-          if (diskSavePromise) {
+          if (Persistence.isSaving()) {
             setVaultStatus("正在存盘 · 写章台未存盘正文仍保留", "warn");
             return;
           }
@@ -5324,6 +4399,7 @@
     setInspectorTab(uiState.inspectorTab || "task", { open: false, persist: false });
     setFocusMode(initialMode === "write" && !!uiState.focusMode, false);
     setLibraryDrawer(!!uiState.libraryOpen, false);
+    Composition.assertComplete(window);
     bootDone = true;
     window.__mogaoReady = true;
     setStatus("就绪", "muted");
@@ -5333,7 +4409,7 @@
     }
 
     window.addEventListener("beforeunload", (ev) => {
-      let flushSucceeded = true;
+      let flushSucceeded;
       try {
         flushSucceeded = window.__mogaoFlushSync?.() !== false;
       } catch (_) {

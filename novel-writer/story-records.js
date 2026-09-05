@@ -66,6 +66,19 @@
     return String(value || "").trim();
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function safeCssToken(value, fallback = "major") {
+    const token = text(value);
+    return /^[a-z][a-z0-9_-]*$/i.test(token) ? token : fallback;
+  }
+
   function rank(table, key) {
     return table[key] ?? 9;
   }
@@ -197,6 +210,145 @@
     };
   }
 
+  function renderCanonHtml(model) {
+    return (model?.visible || [])
+      .map((record) => {
+        const category = String(record.category || "other");
+        const lockState = canonLockState(record);
+        const chapter = evidenceText(record, model.evidenceFields || CANON_EVIDENCE_FIELDS) || "未记录";
+        if (record._recordKind === "conflict") {
+          return `<article class="story-record is-warning">
+            <header><span class="record-badge">${escapeHtml(label(category))}</span><span class="record-badge status-${escapeHtml(lockState)}">${escapeHtml(label(lockState))}</span></header>
+            <h4>${escapeHtml(record.key || "未命名设定")}</h4>
+            <p class="story-record-value"><del>${escapeHtml(record.attempted || "未知试写值")}</del><span aria-hidden="true"> → </span><strong>${escapeHtml(record.kept || "未知锁定值")}</strong></p>
+            <dl><div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div><div><dt>拒绝原因</dt><dd>${escapeHtml(record.reason || "与锁定设定不一致")}</dd></div></dl>
+          </article>`;
+        }
+        const history = Array.isArray(record.history) ? record.history : [];
+        return `<article class="story-record">
+          <header><span class="record-badge">${escapeHtml(label(category))}</span><span class="record-badge status-${escapeHtml(lockState)}">${escapeHtml(label(lockState))}</span></header>
+          <h4>${escapeHtml(record.key || "未命名设定")}</h4>
+          <p class="story-record-value">${escapeHtml(record.value || "未填写")}</p>
+          <dl>
+            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
+            ${record.entity ? `<div><dt>关联实体</dt><dd>${escapeHtml(record.entity)}</dd></div>` : ""}
+            <div><dt>正文证据</dt><dd>${escapeHtml(record.evidence || "未保存摘录")}</dd></div>
+            ${history.length ? `<div><dt>变更记录</dt><dd>${history.length} 次，最近来自 ${escapeHtml(history.at(-1)?.chapter || "未知章节")}</dd></div>` : ""}
+          </dl>
+        </article>`;
+      })
+      .join("");
+  }
+
+  function renderLoopHtml(model) {
+    return (model?.visible || [])
+      .map((loop) => {
+        const chapter = evidenceText(loop, model.evidenceFields || LOOP_EVIDENCE_FIELDS) || "未记录";
+        const actionable = ["open", "deferred"].includes(loop.status);
+        return `<article class="story-record" data-record-status="${escapeHtml(loop.status)}">
+          <header><span class="record-badge">${escapeHtml(label(loop.type))}</span><span class="record-badge status-${escapeHtml(loop.status)}">${escapeHtml(label(loop.status))}</span></header>
+          <h4>${escapeHtml(loop.summary || "未命名伏笔")}</h4>
+          <dl>
+            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
+            <div><dt>正文证据</dt><dd>${escapeHtml(loop.evidence || "未保存摘录")}</dd></div>
+            <div><dt>预计回收</dt><dd>${escapeHtml(loop.target || "待安排")}</dd></div>
+            ${loop.resolutionEvidence ? `<div><dt>回收证据</dt><dd>${escapeHtml(loop.resolutionEvidence)}</dd></div>` : ""}
+          </dl>
+          ${actionable ? `<footer><button type="button" class="btn xs" data-loop-action="resolved" data-loop-index="${loop._sourceIndex}">标记已回收</button><button type="button" class="btn ghost xs" data-loop-action="deferred" data-loop-index="${loop._sourceIndex}">延后</button></footer>` : ""}
+        </article>`;
+      })
+      .join("");
+  }
+
+  function renderContinuityHtml(model) {
+    return (model?.visible || [])
+      .map((issue) => {
+        const chapter = evidenceText(issue, model.evidenceFields || CONTINUITY_EVIDENCE_FIELDS) || "未记录";
+        const severity = safeCssToken(issue.severity, "major");
+        return `<article class="story-record continuity-card severity-${escapeHtml(severity)}" data-record-status="${escapeHtml(issue.status)}">
+          <header><span class="record-badge">${escapeHtml(label(issue.type))}</span><span class="record-badge status-${escapeHtml(issue.status)}">${escapeHtml(label(issue.status))}</span><span class="severity-label">${escapeHtml(label(issue.severity))}</span></header>
+          <h4>${escapeHtml(issue.summary || "未命名风险")}</h4>
+          <dl>
+            <div><dt>证据章节</dt><dd>${escapeHtml(chapter)}</dd></div>
+            <div><dt>正文证据</dt><dd>${escapeHtml(issue.evidence || "未保存摘录")}</dd></div>
+            <div><dt>Canon 证据</dt><dd>${escapeHtml(issue.expected || "未关联 Canon")}</dd></div>
+            <div><dt>处理建议</dt><dd>${escapeHtml(issue.suggestion || "由作者核对并决定")}</dd></div>
+            ${issue.resolution ? `<div><dt>处理记录</dt><dd>${escapeHtml(issue.resolution)}</dd></div>` : ""}
+          </dl>
+          ${issue.status === "open" ? `<footer><button type="button" class="btn xs" data-issue-action="handled" data-issue-index="${issue._sourceIndex}">已处理</button><button type="button" class="btn ghost xs" data-issue-action="ignored" data-issue-index="${issue._sourceIndex}">忽略</button></footer>` : ""}
+        </article>`;
+      })
+      .join("");
+  }
+
+  function buildStorySummary(project) {
+    const spine = project?.spine?.spine || [];
+    const storyline = project?.storyline || {};
+    const logs = (storyline.chapterLogs || []).slice(-6);
+    const memory = project?.memoryRoll || [];
+    const storyState = project?.storyState || {};
+    const stateLines = [
+      storyState.lastChapter ? `最近章：${storyState.lastChapter}` : "",
+      storyState.protagonistState ? `主角：${storyState.protagonistState}` : "",
+      storyState.powerOrSystem ? `能力：${storyState.powerOrSystem}` : "",
+      storyState.location ? `地点：${storyState.location}` : "",
+      (storyState.openLoops || []).length
+        ? `未收回钩子：${(storyState.openLoops || []).slice(0, 6).join("；")}`
+        : "",
+      (storyState.establishedFacts || []).length
+        ? `已确立事实：${(storyState.establishedFacts || []).slice(0, 6).join("；")}`
+        : "",
+    ].filter(Boolean);
+    const memoryLines = memory.slice(-10).map((item) => {
+      if (typeof item === "string") return item;
+      const bits = [
+        item.summary || (item.happened || []).join("，"),
+        item.next_direction ? `向:${item.next_direction}` : "",
+        item.state ? `态:${item.state}` : "",
+        (item.open_loops || []).length ? `钩:${(item.open_loops || []).slice(0, 2).join("/")}` : "",
+      ].filter(Boolean);
+      return `· ${item.chapter || ""} ${bits.join(" | ")}`;
+    });
+    const entityStates = Object.values(project?.entityStates || {}).slice(0, 12);
+    const timeline = (project?.timelineEvents || []).slice(-6);
+    return {
+      spineText:
+        spine.map((act) => `Act${act.act} ${act.name}\n  目标:${act.goal}\n  禁止:${act.forbidden || "-"}`).join("\n\n") ||
+        "尚无脊柱",
+      storylineText:
+        [
+          storyline.positionSummary ? `位置：${storyline.positionSummary}` : "",
+          storyline.lastSummary ? `上章：${storyline.lastSummary}` : "",
+          storyline.nextDirection ? `推进：${storyline.nextDirection}` : "",
+          storyline.nextTaskId ? `下一任务：${storyline.nextTaskId} ${storyline.nextTaskGoal || ""}` : "",
+          logs.length
+            ? "轨迹：\n" + logs.map((item) => `· #${item.order} ${item.summary || item.position || ""}`).join("\n")
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n") || "尚无故事线（写完一章并摘要后生成）",
+      memoryText:
+        [
+          stateLines.length ? "【故事状态】\n" + stateLines.join("\n") : "",
+          memoryLines.length ? "【滚动摘要】\n" + memoryLines.join("\n") : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n") || "尚无滚动摘要（写章后自动生成；将注入下一章上下文）",
+      entityStateText: [
+        entityStates.length
+          ? entityStates
+              .map((item) => `· ${item.entity}｜${item.location || "位置?"}｜${item.condition || item.status || "状态?"}`)
+              .join("\n")
+          : "尚无实体状态",
+        timeline.length
+          ? "时间线：\n" + timeline.map((item) => `· #${item.order || "?"} ${item.time || ""} ${item.event}`).join("\n")
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  }
+
   window.NOVEL_STORY_RECORDS = {
     TYPE_LABELS,
     STATUS_LABELS,
@@ -209,5 +361,9 @@
     buildCanonRecords,
     buildLoopRecords,
     buildContinuityRecords,
+    renderCanonHtml,
+    renderLoopHtml,
+    renderContinuityHtml,
+    buildStorySummary,
   };
 })();

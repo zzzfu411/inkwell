@@ -1,85 +1,50 @@
-# Inkwell（墨稿）· Tauri 客户端
+# Inkwell（墨稿）· Rust/Tauri client
 
-**Inkwell** 是墨稿的英文产品名：用 **Rust + Tauri 2** 打造的本地小说工作室。  
-内嵌 Axum HTTP，复用 `../novel-writer` 前端。
+Inkwell 是本地优先的长篇写作工作台。此仓库提供正式 Rust HTTP/Vault 后端、Tauri 桌面壳、嵌入式 canonical UI 镜像、完整 CI 和不可变发布事务。唯一 UI 源位于同级 `novel-writer/`。
 
-**定位**：本地优先的「**AI 连写创作** + **叙事关系分析**」一体化工作台（vault 一书一夹；分析可切章分块、暂停续跑、图谱筛选/档案/时间线）。
+## 当前文档入口
 
-## 0.11 报馆稿纸与关系星图
+- [当前架构](../novel-writer/docs/ARCHITECTURE.md)
+- [当前工程审计与 Phase 0–7 执行记录](../novel-writer/docs/ENGINEERING-AUDIT-2026-09.md)
+- [不可变发布手册](./docs/RELEASE.md)
 
-写作页是朱丝栏稿纸。人物关系与分析页用可点选星图，不再把 Mermaid 源码当主视图。
+以上三处是当前入口。旧 GOAL 文档已归档，不参与当前实现与验收。
 
-## 0.10 墨色编辑台与连续性闭环
+## 开发
 
-每次调用 `gemini-3.6-flash` 都可以是全新无状态请求。Inkwell 会从当前书目的持久化记忆装配写前上下文，并在生成后执行：
+环境：Rust stable、Node.js/npm、Windows WebView2；完整 CI 还需要 Python debug compatibility runtime。
 
-`Retrieve → Write → Continuity Review → Optional Local Repair → Handoff → Reindex`
-
-记忆包括类型化 Canon、钩子生命周期、连续性风险、多实体状态、时间线、风格圣经、章摘要和历史正文 RAG。写前 manifest 会记录 token/字符预算、裁剪块、Canon 选择及 RAG 命中。
-
-| 语言 | 名称 |
-|------|------|
-| English | **Inkwell** |
-| 中文 | **墨稿** |
-
-## 环境
-
-- Rust stable（`rustc` / `cargo`）
-- Node.js + npm（Tauri CLI）
-- Windows：WebView2（系统通常自带）
-
-## 开发运行
-
-```bat
-cd mogao-tauri
+```powershell
 npm install
 npm run tauri dev
 ```
 
-会启动窗口，加载 `http://127.0.0.1:<随机端口>/`，静态页来自同级 `novel-writer/`。  
-书库默认：`mogao-tauri/vault/`（可用环境变量 `MOGAO_VAULT` 覆盖）。
-
-## 发布构建（推荐）
-
-```bat
-cd mogao-tauri
-build-release.bat
-```
-
-会：
-
-1. 同步 `../novel-writer` 前端 → `release/ui`
-2. 运行版本/UI/Rust/Node/Python 完整 CI 门禁
-3. `cargo build --release`
-4. 输出 `release/Inkwell.exe` + `ui/` + `manifest.json`（EXE/UI SHA-256）+ 说明
-
-正式发布默认要求 `mogao-tauri` 与 `novel-writer` 两个仓库均为干净工作树。开发过程中如需验证未提交改动，可显式运行：
+完整门禁：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1 -AllowDirty
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ci.ps1
 ```
 
-该模式不会伪装成正式发布：`manifest.json` 会记录两个仓库的 `dirty=true`、可发布源码改动计数与完整源树哈希；`release`、`target`、`ui-embed`、测试输出和缓存不会污染该计数。
+它执行版本与 UI 清单、release helper、ESLint、Rust、Node/领域覆盖率、文章质量 fixture、20/100/400 章性能预算、Python、共享后端合同、正式 Rust 浏览器 E2E、布局和视觉基线。
 
-本地 CI：
+## 发布
 
-```bat
-powershell -File scripts\ci.ps1
+正式构建只接受两个干净仓库：
+
+```powershell
+.\build-release.bat
 ```
 
-无外置 `ui/` 时，二进制会尝试使用 **编译期嵌入的 ui-embed**。
+开发中的脏树验证必须显式使用 `scripts/build-release.ps1 -AllowDirty`；产物 manifest 会保留 dirty provenance，不会冒充正式发布。现有 release 可随时用以下命令按自身 manifest 独立校验：
 
-Release 的设置与默认书库位于用户可写目录 `%LOCALAPPDATA%\Inkwell\`；Debug 仍使用源码目录。API Key 不写入设置 JSON：Windows 正式客户端通过当前用户绑定的 DPAPI 密文 `%LOCALAPPDATA%\Inkwell\api-key.dpapi` 保存，并会在首次加载时迁移旧版 JSON 明文。旧版设置文件仍保留用于非密钥配置回滚，请在确认迁移后妥善处理可能含旧密钥的历史副本。
+```powershell
+npm run verify:release
+```
 
-## 与 novel-writer 关系
+## Runtime boundaries
 
-| | `novel-writer` | `mogao-tauri` |
-|--|----------------|---------------|
-| 角色 | 前端 UI + 可选 Python 调试 | **正式桌面客户端 Inkwell** |
-| 后端 | （调试用）server.py | Rust vault + axum |
-| 启动 | 浏览器 / start-desktop.bat | **Inkwell.exe** / `npm run tauri dev` |
-
-**Python `novel-writer/server.py` 为 DEBUG ONLY**（无 token、能力落后），请勿当事生产后端。  
-正式请只用本目录 **Inkwell.exe**。
-
-API 仍为 `/api/health`、`/api/books/...` 等；会话需 `X-Mogao-Token`（由客户端注入）。
+- Rust/Tauri 是正式后端；`novel-writer/server.py` 仅保留冻结的调试合同兼容。
+- API 会话使用 `X-Mogao-Token`；正式 API Key 由当前 Windows 用户绑定的 DPAPI 密文保存。
+- 默认 Vault 位于应用可写目录，可用 `MOGAO_VAULT` 覆盖开发路径。
+- `src-tauri/ui-embed/` 是 canonical UI 的原子构建镜像；`release/` 只由完整发布事务替换。
+- Runtime diagnostics 保持本地、可显式导出，并通过字段白名单排除正文、提示词、密钥、URL 与原始异常文本。

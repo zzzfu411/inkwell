@@ -1,6 +1,7 @@
 /** 本地书库客户端 —— 对接 /api/*（Mogao 本地服务） */
 window.NOVEL_VAULT = (() => {
   const BASE = ""; // same origin
+  let backendEngine = "";
 
   /** 启动时从 URL ?token= 读取（Tauri 注入）；读入后从地址栏剥离，避免长期暴露 */
   (function initMogaoToken() {
@@ -40,7 +41,7 @@ window.NOVEL_VAULT = (() => {
     }
     const res = await fetch(`${BASE}${path}`, opts);
     const text = await res.text();
-    let data = null;
+    let data;
     try {
       data = text ? JSON.parse(text) : null;
     } catch (_) {
@@ -51,6 +52,7 @@ window.NOVEL_VAULT = (() => {
       const err = new Error(msg);
       err.status = res.status;
       err.data = data;
+      err.code = data?.error?.code || data?.code || (res.status === 409 ? "HTTP_CONFLICT" : `HTTP_${res.status}`);
       throw err;
     }
     return data;
@@ -58,6 +60,7 @@ window.NOVEL_VAULT = (() => {
 
   /** POST /api/preview/markdown → { html } 或纯 HTML 字符串 */
   async function previewMarkdown(content) {
+    if (backendEngine === "python-debug") return null;
     const data = await req("POST", "/api/preview/markdown", { content: String(content || "") });
     if (typeof data === "string") return data;
     if (data?.html != null) return String(data.html);
@@ -67,7 +70,9 @@ window.NOVEL_VAULT = (() => {
 
   async function health() {
     try {
-      return await req("GET", "/api/health");
+      const result = await req("GET", "/api/health");
+      backendEngine = result?.engine || "";
+      return result;
     } catch (e) {
       return null;
     }
@@ -116,12 +121,28 @@ window.NOVEL_VAULT = (() => {
     return req("GET", "/api/library");
   }
 
+  /**
+   * 磁盘返回的是完整正文，也是核对 production.bodySig 的权威时机。
+   * localStorage 里的 slim 书可能没有 body，不能在那里误判为外部删稿。
+   */
+  function reconcileLoadedBook(project, reason = "磁盘正文已变化，旧质量报告已失效") {
+    const migration = window.NOVEL_PROJECT_MIGRATIONS?.migrateProject?.(project, {
+      reason: "Vault 完整装载",
+    });
+    if (!migration?.readOnly) {
+      window.NOVEL_PRODUCTION_STATE?.reconcileProject?.(project, { reason });
+    }
+    return project;
+  }
+
   async function loadBook(slug) {
-    return req("GET", `/api/books/${encodeURIComponent(slug)}`);
+    const project = await req("GET", `/api/books/${encodeURIComponent(slug)}`);
+    return reconcileLoadedBook(project);
   }
 
   function prepareProjectForSave(project) {
-    const payload = { ...(project || {}) };
+    const writable = window.NOVEL_PROJECT_MIGRATIONS?.assertWritable?.(project) || project;
+    const payload = { ...(writable || {}) };
     const serialized = window.NOVEL_RAG?.serializeIndex?.(project?.ragIndex);
     if (serialized) payload.ragIndex = serialized;
     else delete payload.ragIndex;
@@ -180,10 +201,10 @@ window.NOVEL_VAULT = (() => {
           local.chapters.push(clone);
           added.push(clone);
         }
-        continue;
+        if (!localChapter || String(localChapter.body || "") === String(diskChapter.body || "")) continue;
       }
       conflicts.push({
-        warning: { ...warning },
+        warning: { ...warning, kind: "externalConflict" },
         localChapter: localChapter || null,
         diskChapter: JSON.parse(JSON.stringify(diskChapter)),
       });
@@ -205,6 +226,7 @@ window.NOVEL_VAULT = (() => {
    * 换了基线下一次保存就会静默盖掉。
    */
   function adoptChapterBaselines(project, saved, warnings) {
+    if (saved?.bookRevision) project._bookRevision = saved.bookRevision;
     const chapters = Array.isArray(project?.chapters) ? project.chapters : [];
     const rows = Array.isArray(saved?.chapterBaselines) ? saved.chapterBaselines : [];
     if (!chapters.length || !rows.length) return 0;
@@ -226,6 +248,8 @@ window.NOVEL_VAULT = (() => {
       if (!chapter) continue;
       chapter._file = row.file;
       chapter._fileMtime = mtime;
+      if (row.revision) chapter._fileRevision = row.revision;
+      chapter._bodyLoaded = true;
       adopted += 1;
     }
     return adopted;
@@ -320,7 +344,8 @@ window.NOVEL_VAULT = (() => {
   }
 
   async function reloadBook(slug) {
-    return req("POST", `/api/books/${encodeURIComponent(slug)}/reload`, {});
+    const project = await req("POST", `/api/books/${encodeURIComponent(slug)}/reload`, {});
+    return reconcileLoadedBook(project, "重新载入的磁盘正文已变化，旧质量报告已失效");
   }
 
   async function reveal(path) {
@@ -347,7 +372,10 @@ window.NOVEL_VAULT = (() => {
   }
 
   async function migrate(projects) {
-    return req("POST", "/api/migrate", { projects });
+    const writable = (Array.isArray(projects) ? projects : []).map((project) =>
+      prepareProjectForSave(project)
+    );
+    return req("POST", "/api/migrate", { projects: writable });
   }
 
   async function rescan() {
@@ -416,11 +444,36 @@ window.NOVEL_VAULT = (() => {
     return req("GET", `/api/books/${encodeURIComponent(slug)}/file?path=${q}`);
   }
 
-  async function writeFile(slug, filePath, content) {
+  async function writeFile(slug, filePath, content, expectedRevision = "missing") {
     return req("PUT", `/api/books/${encodeURIComponent(slug)}/file`, {
       path: filePath,
       content,
+      expectedRevision,
     });
+  }
+
+  /** Capture output baselines before a long analysis; never refresh them silently at commit time. */
+  async function createFileWriter(slug, prefix) {
+    const revisions = new Map();
+    const tree = await fileTree(slug);
+    async function collect(nodes) {
+      for (const node of nodes || []) {
+        if (node.type === "dir") await collect(node.children);
+        else if (String(node.path || "").startsWith(prefix)) {
+          const file = await readFile(slug, node.path);
+          revisions.set(node.path, file.revision);
+        }
+      }
+    }
+    await collect(tree.tree);
+    return {
+      slug,
+      async write(path, content) {
+        const result = await writeFile(slug, path, content, revisions.get(path) || "missing");
+        revisions.set(path, result.revision);
+        return result;
+      },
+    };
   }
 
   /** POST /api/books/{slug}/fs/mkdir { path } */
@@ -457,6 +510,7 @@ window.NOVEL_VAULT = (() => {
     createVault,
     library,
     loadBook,
+    reconcileLoadedBook,
     saveBook,
     prepareProjectForSave,
     reconcileSavedBook,
@@ -483,6 +537,7 @@ window.NOVEL_VAULT = (() => {
     fileWatch,
     readFile,
     writeFile,
+    createFileWriter,
     fsMkdir,
     fsCreate,
     fsRename,

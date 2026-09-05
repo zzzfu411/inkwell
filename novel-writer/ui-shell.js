@@ -66,9 +66,16 @@
     "retrieve-blocked": { label: "故事记忆未就绪 · 已停止生成", kind: "err" },
     "prev-handoff": { label: "上一章记忆未交接 · 先补摘要…", kind: "busy" },
     planning: { label: "铺本章细纲…", kind: "busy" },
+    contract: { label: "编译章节契约…", kind: "busy" },
+    "scene-planning": { label: "拆分因果场面…", kind: "busy" },
     writing: { label: "请求模型并生成正文…", kind: "busy" },
+    "scene-writing": { label: "逐场生成正文…", kind: "busy" },
     reviewing: { label: "连续性审查中…", kind: "busy" },
+    "quality-review": { label: "叙事质量验收中…", kind: "busy" },
     repairing: { label: "连续性局部修复中…", kind: "busy" },
+    revising: { label: "质量闸门救稿中…", kind: "busy" },
+    "quality-blocked": { label: "质量未通过 · 已保留待修订", kind: "err" },
+    accepted: { label: "正文验收通过…", kind: "busy" },
     digesting: { label: "章后交接 · 提炼摘要…", kind: "busy" },
     graphing: { label: "章后交接 · 更新人物关系…", kind: "busy" },
     index: { label: "章后交接 · 更新故事索引…", kind: "busy" },
@@ -84,6 +91,21 @@
 
   const GENERATION_RAIL_STAGES = Object.freeze(["context", "model", "review", "handoff"]);
 
+  const TASK_STATUS_LABELS = Object.freeze({
+    pending: "待写",
+    writing: "生成中",
+    written: "正文已写",
+    digested: "待交接",
+    needs_revision: "待修订",
+    done: "已完成",
+    failed: "失败",
+  });
+
+  function taskStatusLabel(status) {
+    const key = String(status || "pending").trim().toLowerCase();
+    return TASK_STATUS_LABELS[key] || key || "待写";
+  }
+
   /**
    * 状态条上的四段进度只有状态文案可依据，这里做反向映射。
    * 三种终态要分开：全绿（完成并已交接）、只绿前两段（正文已出但待交接）、
@@ -94,10 +116,10 @@
     // 从最靠后的阶段往前判：状态文案常带上一步的动词（「修订完成 · 交接失败」），
     // 先匹配写作阶段会把交接期的失败画在错误的格子上。
     let current = -1;
-    if (/交接|摘要|关系|索引/.test(text)) current = 3;
-    else if (/审查|修复|复检/.test(text)) current = 2;
-    else if (/生成|写章|重写|修订|请求模型/.test(text)) current = 1;
-    else if (/检索|装配|上下文|细纲/.test(text)) current = 0;
+    if (/交接|摘要|关系|索引|验收通过/.test(text)) current = 3;
+    else if (/审查|修复|复检|质量|救稿|闸门/.test(text)) current = 2;
+    else if (/生成|写章|重写|修订|请求模型|逐场/.test(text)) current = 1;
+    else if (/检索|装配|上下文|细纲|契约|场面/.test(text)) current = 0;
     const complete = /完成|已交接|连写结束/.test(text) && !/未完成|待/.test(text);
     const draftComplete = /(?:重写|修订)完成|正文已生成/.test(text) && /待.*交接/.test(text);
     const failed = kind === "err" || /失败|停止|错误/.test(text);
@@ -347,6 +369,8 @@
     generationStagePresentation,
     generationRailState,
     GENERATION_RAIL_STAGES,
+    TASK_STATUS_LABELS,
+    taskStatusLabel,
     recoverConcatenatedStylePacing,
   };
 

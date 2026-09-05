@@ -38,6 +38,8 @@ class VaultTests(unittest.TestCase):
     def test_create_and_save_chapters_incremental(self):
         S = self.S
         book = S.create_book("单测之书", "idea")
+        self.assertEqual(book["schemaVersion"], 1)
+        self.assertEqual(book["schemaMigrationHistory"], [])
         slug = book["slug"]
         book["chapters"] = [
             {
@@ -253,6 +255,7 @@ class VaultTests(unittest.TestCase):
         S.save_book_to_disk(slug, book, do_snapshot=False)
         loaded = S.load_book_from_disk(slug)
         loaded["chapters"][0]["body"] = ""
+        loaded["chapters"][0]["_bodyLoaded"] = False
         saved = S.save_book_to_disk(slug, loaded, do_snapshot=False)
         chapter_dir = S.BOOKS / slug / "章节"
         texts = [p.read_text(encoding="utf-8") for p in chapter_dir.glob("*.md")]
@@ -297,6 +300,7 @@ class VaultTests(unittest.TestCase):
         future = (chapter["_fileMtime"] + 2000) / 1000
         os.utime(path, (future, future))
 
+
         chapter["body"] = "LOCAL_NEW"
         chapter["updatedAt"] = S.now_ms()
         saved = S.save_book_to_disk(slug, loaded, do_snapshot=False)
@@ -327,15 +331,16 @@ class VaultTests(unittest.TestCase):
         os.utime(path, (future, future))
 
         stale = json.loads(json.dumps(first))
+        path.write_text(path.read_text(encoding="utf-8").replace("第一版", "外部版"), encoding="utf-8")
         stale["chapters"][0]["body"] = "第二版"
         stale_saved = S.save_book_to_disk(slug, stale, do_snapshot=False)
         self.assertTrue(
             any(w.get("kind") == "externalConflict" for w in stale_saved.get("_saveWarnings") or []),
             "旧基线必须仍然判冲突，否则乐观并发形同虚设",
         )
-        self.assertIn("第一版", path.read_text(encoding="utf-8"))
+        self.assertIn("外部版", path.read_text(encoding="utf-8"))
 
-        fresh = json.loads(json.dumps(first))
+        fresh = S.load_book_from_disk(slug)
         fresh["chapters"][0]["body"] = "第二版"
         fresh["chapters"][0]["_fileMtime"] = int(path.stat().st_mtime * 1000)
         fresh_saved = S.save_book_to_disk(slug, fresh, do_snapshot=False)
@@ -588,6 +593,49 @@ class VaultTests(unittest.TestCase):
         loaded = S.load_book_from_disk(slug)
         ids = [t.get("id") for t in loaded.get("tasks") or []]
         self.assertEqual(set(ids), {"t1", "t2", "t3"}, ids)
+
+
+    def test_checked_save_rejects_stale_metadata_and_preserves_authoritative_clear(self):
+        S = self.S
+        book = S.create_book("版本校验", "")
+        slug = book["slug"]
+        book["chapters"] = [{"id": "c1", "title": "第一章", "order": 1, "body": "Original"}]
+        S.save_book_to_disk(slug, book, checked=True)
+        a = S.load_book_from_disk(slug)
+        b = json.loads(json.dumps(a))
+        b["locks"]["logline"] = "外部设定"
+        S.save_book_to_disk(slug, b, checked=True)
+        a["chapters"][0]["body"] = "本地稿"
+        with self.assertRaises(S.StorageConflict) as conflict:
+            S.save_book_to_disk(slug, a, checked=True)
+        self.assertEqual(conflict.exception.code, "BOOK_CONFLICT")
+        fresh = S.load_book_from_disk(slug)
+        self.assertIn("Original", fresh["chapters"][0]["body"])
+        self.assertEqual(fresh["locks"]["logline"], "外部设定")
+        fresh["chapters"][0]["body"] = ""
+        S.save_book_to_disk(slug, fresh, checked=True)
+        self.assertEqual(S.load_book_from_disk(slug)["chapters"][0]["body"], "")
+
+    def test_content_versions_protect_file_and_chapter_with_preserved_mtime(self):
+        S = self.S
+        book = S.create_book("同时间戳", "")
+        slug = book["slug"]
+        book["chapters"] = [{"id": "c1", "title": "第一章", "order": 1, "body": "Original"}]
+        S.save_book_to_disk(slug, book, checked=True)
+        stale = S.load_book_from_disk(slug)
+        rel = stale["chapters"][0]["_file"]
+        file = S.read_book_file(slug, rel)
+        path = S.safe_rel_under_book(slug, rel)
+        stat = path.stat()
+        path.write_text(file["content"].replace("Original", "External"), encoding="utf-8")
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        with self.assertRaises(S.StorageConflict) as conflict:
+            S.write_book_file(slug, rel, "Stale", file["revision"], True)
+        self.assertEqual(conflict.exception.code, "FILE_CONFLICT")
+        stale["chapters"][0]["body"] = "Stale"
+        protected = S.save_book_to_disk(slug, stale, checked=True)
+        self.assertEqual(protected["_saveWarnings"][0]["kind"], "externalConflict")
+        self.assertIn("External", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

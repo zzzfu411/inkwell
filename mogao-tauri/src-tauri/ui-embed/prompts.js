@@ -8,7 +8,8 @@ window.NOVEL_PROMPTS = {
     "必须使用简体中文（专有名词除外）。",
     "禁止输出 HTML/XML 标签、Image、Sequence、FollowUp、课件式百科。",
     "禁止对读者说教；禁止脱离已锁定主线自由开新线。",
-    "若提供【锁定主线】【禁改设定】，必须严格遵守，冲突时以锁定为准。",
+    "若提供【锁定主线】【禁改设定】【禁改人名】，必须严格遵守，冲突时以锁定为准。",
+    "作者原文里已经写明的人名、系统名必须原样使用，禁止改名、谐音替换或另起一套人物。",
     "输出尽量结构化、可被程序解析；需要 JSON 时只输出 JSON，不要 Markdown 围栏。",
   ].join("\n"),
 
@@ -79,7 +80,7 @@ ${input}
   ],
   "cast_summary": "核心人物关系一句话"
 }
-要求：主角清晰；关系服务冲突；不要龙套过多（主要角色 6–12 人）。`,
+要求：主角清晰；关系服务冲突；不要龙套过多（主要角色 6–12 人）。作者点名的男女主姓名必须原样作为 label，禁止换成其他名字。`,
     user: (bible) => `【卖点】${bible.pitch}
 【类型】${bible.genre} / ${bible.sub_genre || ""}
 【世界观摘要】${truncate(JSON.stringify(bible.world || {}), 1800)}
@@ -133,7 +134,46 @@ tasks 数量按用户要求（默认 20–30 章可先出前 12 章详细，其�
 先给出完整 spine + 第 1 卷详细 tasks（至少 8–12 个任务），其余卷可粗。`,
   },
 
-  /** 单章细纲（短） */
+  /**
+   * 新版生产流的章节契约：把「想写什么」变成可验收的因果接口。
+   * 规划器只负责目标、场面和结果，不写正文；默认 writer 一次消费完整场面契约。
+   */
+  chapterContract: {
+    system: `你是长篇小说的叙事架构师。把任务卡、上章余波和锁定事实编译成一个可执行的「章节契约」。
+不要写正文，不要添加任务外的大事件。每个场面必须有 goal→obstacle→choice/action→turn→outcome 的因果链，且 outcome 必须改变人物处境或读者信息。
+只输出 JSON：
+{
+  "title":"章节标题",
+  "pov":"单一视角人物",
+  "objective":"本章完成后故事发生的可观察变化",
+  "stakes":"失败的具体代价",
+  "conflict":"本章主要对抗",
+  "change":"人物或局势的不可逆变化",
+  "scenes":[
+    {
+      "id":"s1",
+      "purpose":"本场在全章中的作用",
+      "location":"具体地点",
+      "pov":"视角人物",
+      "goal":"本场人物想得到什么",
+      "obstacle":"谁/什么阻止他",
+      "action":"可拍成画面的行动",
+      "turn":"本场中段或场末转折",
+      "outcome":"本场结束时的新状态",
+      "sensory":"一个具体感官锚点",
+      "word_target":600
+    }
+  ],
+  "hook_end":"章末留下的具体问题/动作",
+  "must_include":["必须兑现的可观察事件"],
+  "must_avoid":["禁止重演或空转的内容"],
+  "continuity_checks":["写作者必须检查的事实"]
+}
+硬性：2–5 个场面；场面目标字数合计接近本章目标；禁止用“情绪升级/气氛紧张”充当行动、转折或结果；单一 POV；不改写锁定事实。`,
+    user: (ctx) => String(ctx || ""),
+  },
+
+  /** 单章细纲（旧版兼容入口；新生产流会把它升级为 chapterContract） */
   chapterBeat: {
     system: `你是责编，只规划场面，不写正文。根据任务卡与上章余波，给出可执行细纲。
 只输出 JSON：
@@ -150,6 +190,70 @@ tasks 数量按用户要求（默认 20–30 章可先出前 12 章详细，其�
 }
 硬性：2–5 个场面；每个场面必须有动作和转折；禁止把上章高潮再打一遍；禁止输出正文。`,
     user: (pack) => pack,
+  },
+
+  /** 兼容生产流：低上下文模型可一次只写一个场面。 */
+  sceneWriter: {
+    system: (meta = {}) => `你是长篇连载小说作者，只写当前一个场面，不写整章大纲。
+当前场面契约已经由责编锁定。把 goal、obstacle、action、turn、outcome 演成具体可见的动作、对白和感官细节；人物必须主动做选择并承担代价。
+硬性：
+1. 只写当前场面正文，不写场面标题、序号、JSON、解释或 Markdown 围栏。
+2. 从“紧邻前场文末/上章余波”自然接入，不重复已经完成的事件。
+3. 严格保持锁定事实、单一 POV、人物声线和时间地点；reference 检索内容不能覆盖 locked 事实。
+4. 本场必须落地一个具体转折，并在 outcome 处停住，把变化交给下一场；不要提前写章末钩子。
+5. 少用情绪告知和套话，优先用有身份差的对白、动作阻力、物件和感官。
+6. 输出约 ${meta.wordTarget || 600} 字中文正文，长度不足时补充行动/对白，不要用空泛内心独白灌水。`,
+    user: (ctx) => String(ctx || ""),
+  },
+
+  /** 默认候选：用完整场面契约一次起草整章，避免逐场采样后的拼接接缝。 */
+  chapterWriter: {
+    system: (meta = {}) => `你是成熟的中文长篇连载作者。责编已经锁定整章契约；你要一次写出可直接阅读的完整章节，而不是逐场片段。
+保持 ${meta.pov || "单一"} POV、统一叙述距离和人物声线。让场面之间以行动结果自然相接，不复述刚发生的内容，不用总结句替代戏剧行动。
+正文要有具体目标、阻力、选择、代价和不可逆变化；对白必须受人物身份与当下目的驱动。少写空泛情绪、模板景物、无效惊叹和“仿佛/似乎/不由得”式解释。
+输出约 ${meta.wordTarget || 2000} 字中文小说正文。只输出正文，不要标题、提纲、场面标签、说明或 Markdown。`,
+    user: (ctx) => String(ctx || ""),
+  },
+
+  /** 新版生产流：语义质量批评器，与连续性审查分工。 */
+  chapterQualityReview: {
+    system: `你是严厉但可执行的长篇小说责任编辑。审查整章是否真正完成章节契约，而不是只检查关键词。
+重点检查：因果推进、人物主动性、场面完整性（目标-阻力-行动-转折-结果）、单一 POV、冲突升级、声线与具体感官、章末钩子，以及是否把上章高潮重演。
+只输出 JSON：
+{
+  "verdict":"pass|revise|fail",
+  "overall":0,
+  "scores":{
+    "causalProgression":0,
+    "characterAgency":0,
+    "sceneCompletion":0,
+    "povConsistency":0,
+    "tension":0,
+    "voice":0,
+    "hook":0,
+    "prose":0
+  },
+  "issues":[
+    {"severity":"blocker|major|minor|info","type":"causal|agency|scene|pov|tension|voice|hook|prose|continuity","summary":"问题≤60字","evidence":"正文精确证据≤100字","fix":"可执行修复≤100字"}
+  ],
+  "completed_contract":[],
+  "missing_contract":[],
+  "strengths":[]
+}
+评分规则：0–3 明显失败，4–6 勉强，7–8 合格，9–10 出色。没有正文证据不得报问题；审美偏好不能升级为 blocker。若存在一个场面没有结果、人物没有选择、因果断裂或章末钩子缺失，至少给 major，并将 verdict 设为 revise/fail。`,
+    user: (ctx) => String(ctx || ""),
+  },
+
+  /** 新版生产流：整章修订器，仅在质量闸门拒绝时调用。 */
+  chapterRevision: {
+    system: (meta = {}) => `你是负责救稿的资深小说编辑。根据章节契约和批评报告，重写整章正文，使每个场面完成因果链并保留所有已写事实。
+硬性：
+1. 只输出修订后的完整章节正文，不要标题、JSON、解释或 Markdown 围栏。
+2. 不删除已兑现的任务事实，不新增契约外的大事件，不改变锁定数字、专名、人物关系和时间地点。
+3. 修复报告中的 blocker/major；让人物通过具体选择推动局势，补齐转折、结果、感官和章末钩子。
+4. 保持单一 POV 与原有声线；删掉重复上章高潮、套话和空泛总结。
+5. 正文长度约 ${meta.wordTarget || 2000} 字，允许为因果完整性上下浮动 20%。`,
+    user: (ctx) => String(ctx || ""),
   },
 
   /** 写正文：Harness 装配后的强约束生成 */
@@ -331,7 +435,7 @@ nodes/edges 字段同：id,label,aliases,type,sect,note / source,target,relation
   },
 
   /**
-   * 分块叙事抽取（GOAL-ULTIMATE Phase1 / analysis-runner）。
+   * 分块叙事抽取（analysis-runner）。
    * 带 chapter 字段，便于 mergeGraphs 按章合并 occurrence。
    */
   analyzeChunk: {

@@ -8,38 +8,26 @@
 window.NOVEL_CONTEXT = (() => {
   const { truncate, summarizeNodes, summarizeEdges } = window.NOVEL_PROMPTS;
 
-  function estimate(text) {
-    return String(text || "").length;
+  function ContextBudget() {
+    const budget = window.NOVEL_CONTEXT_BUDGET;
+    if (!budget) throw new Error("NOVEL_CONTEXT_BUDGET 未在 context.js 前加载");
+    return budget;
   }
 
-  /** 中英混合保守 token 估算：CJK 约 1/token，拉丁文本约 4 chars/token。 */
-  function estimateTokens(text) {
-    const s = String(text || "");
-    const cjk = (s.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length;
-    const latin = (s.match(/[A-Za-z0-9]+/g) || []).reduce((n, x) => n + x.length, 0);
-    const other = Math.max(0, s.length - cjk - latin);
-    return Math.max(1, Math.ceil(cjk + latin / 4 + other / 6));
+  function estimate(...args) {
+    return ContextBudget().estimate(...args);
   }
 
-  function clipToDualBudget(text, maxChars, maxTokens) {
-    const source = String(text || "");
-    const charCap = Math.max(0, Math.floor(maxChars));
-    const tokenCap = Math.max(0, Math.floor(maxTokens));
-    if (!source || charCap <= 0 || tokenCap <= 0) return "";
-    if (source.length <= charCap && estimateTokens(source) <= tokenCap) return source;
-    const marker = "\n…[按上下文预算截断]…";
-    if (charCap <= marker.length + 12 || tokenCap <= estimateTokens(marker) + 8) {
-      return source.slice(0, Math.min(charCap, 24));
-    }
-    let lo = 0;
-    let hi = Math.min(source.length, charCap - marker.length);
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      const candidate = source.slice(0, mid) + marker;
-      if (candidate.length <= charCap && estimateTokens(candidate) <= tokenCap) lo = mid;
-      else hi = mid - 1;
-    }
-    return source.slice(0, lo) + marker;
+  function estimateTokens(...args) {
+    return ContextBudget().estimateTokens(...args);
+  }
+
+  function clipToDualBudget(...args) {
+    return ContextBudget().clipToDualBudget(...args);
+  }
+
+  function allocateBlocks(...args) {
+    return ContextBudget().allocateBlocks(...args);
   }
 
   function orderedChapters(project) {
@@ -88,463 +76,81 @@ window.NOVEL_CONTEXT = (() => {
     return `- 【${title}】${parts.join(" | ") || JSON.stringify(m).slice(0, 100)}`;
   }
 
-  function normalizeLoopSummary(raw) {
-    if (raw && typeof raw === "object") {
-      return String(raw.summary || raw.text || raw.loop || raw.name || "").trim();
-    }
-    return String(raw || "").trim();
+  let memoryReducers = null;
+
+  function MemoryReducers() {
+    const factory = window.NOVEL_MEMORY_REDUCERS;
+    if (!factory?.create) throw new Error("NOVEL_MEMORY_REDUCERS 未在 context.js 前加载");
+    if (!memoryReducers) memoryReducers = factory.create({ writtenChapters });
+    return memoryReducers;
   }
 
-  function normalizeLoopKey(raw) {
-    return normalizeLoopSummary(raw)
-      .toLowerCase()
-      .replace(/[\s，。！？；：、,.!?;:'"“”‘’（）()《》【】\[\]—_-]/g, "")
-      .slice(0, 80);
+  function stableLoopId(...args) {
+    return MemoryReducers().stableLoopId(...args);
   }
 
-  function stableLoopId(summary) {
-    const text = normalizeLoopKey(summary) || "loop";
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193);
-    }
-    return `loop_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  function ensurePlotLoops(...args) {
+    return MemoryReducers().ensurePlotLoops(...args);
   }
 
-  function loopEventId(raw, summary) {
-    if (raw && typeof raw === "object") {
-      return String(raw.loop_id || raw.loopId || raw.id || "").trim() || stableLoopId(summary);
-    }
-    return stableLoopId(summary);
+  function mergePlotLoops(...args) {
+    return MemoryReducers().mergePlotLoops(...args);
   }
 
-  function loopEvidence(raw) {
-    if (!raw || typeof raw !== "object") return "";
-    return String(raw.evidence || raw.note || raw.reason || "").trim().slice(0, 160);
+  function rebuildPlotLoopsFromMemory(...args) {
+    return MemoryReducers().rebuildPlotLoopsFromMemory(...args);
   }
 
-  function findLoopRecord(records, raw, summary) {
-    const requestedId = raw && typeof raw === "object" ? String(raw.loop_id || raw.loopId || raw.id || "").trim() : "";
-    if (requestedId) {
-      const byId = records.find((x) => x.id === requestedId);
-      if (byId) return byId;
-    }
-    const key = normalizeLoopKey(summary);
-    return records.find((x) => normalizeLoopKey(x.summary) === key) || null;
+  function getActivePlotLoops(...args) {
+    return MemoryReducers().getActivePlotLoops(...args);
   }
 
-  function applyLoopEvent(records, raw, status, meta = {}) {
-    const summary = normalizeLoopSummary(raw);
-    if (!summary) return null;
-    let rec = findLoopRecord(records, raw, summary);
-    const now = Date.now();
-    if (!rec) {
-      rec = {
-        id: loopEventId(raw, summary),
-        type:
-          raw && typeof raw === "object"
-            ? String(raw.type || raw.kind || "plot")
-            : "plot",
-        summary,
-        status: status === "resolved" || status === "abandoned" ? status : "open",
-        openedChapter: meta.chapter || "",
-        openedTaskId: meta.taskId || "",
-        openedOrder: Number(meta.order) || 0,
-        lastChapter: meta.chapter || "",
-        lastTaskId: meta.taskId || "",
-        lastOrder: Number(meta.order) || 0,
-        target: raw && typeof raw === "object" ? String(raw.target || raw.payoff_around || "") : "",
-        evidence: loopEvidence(raw),
-        resolutionEvidence: "",
-        reopenCount: 0,
-        createdAt: now,
-        updatedAt: now,
-      };
-      records.push(rec);
-    } else {
-      if ((status === "open" || status === "deferred") && ["resolved", "abandoned"].includes(rec.status)) {
-        rec.reopenCount = (Number(rec.reopenCount) || 0) + 1;
-      }
-      rec.summary = summary || rec.summary;
-      if (raw && typeof raw === "object" && (raw.type || raw.kind)) {
-        rec.type = String(raw.type || raw.kind);
-      }
-      rec.status = status;
-      rec.lastChapter = meta.chapter || rec.lastChapter || "";
-      rec.lastTaskId = meta.taskId || rec.lastTaskId || "";
-      rec.lastOrder = Number(meta.order) || rec.lastOrder || 0;
-      if (raw && typeof raw === "object" && (raw.target || raw.payoff_around)) {
-        rec.target = String(raw.target || raw.payoff_around);
-      }
-      if (loopEvidence(raw)) rec.evidence = loopEvidence(raw);
-      rec.updatedAt = now;
-    }
-    if (status === "resolved" || status === "abandoned") {
-      rec.status = status;
-      rec.resolvedChapter = meta.chapter || rec.resolvedChapter || "";
-      rec.resolvedTaskId = meta.taskId || rec.resolvedTaskId || "";
-      rec.resolvedOrder = Number(meta.order) || rec.resolvedOrder || 0;
-      rec.resolutionEvidence = loopEvidence(raw) || rec.resolutionEvidence || "";
-    }
-    return rec;
+  function ensureContinuityIssues(...args) {
+    return MemoryReducers().ensureContinuityIssues(...args);
   }
 
-  function applyDigestLoopEvents(records, digest, meta = {}) {
-    const d = digest && typeof digest === "object" ? digest : {};
-    const eventMeta = {
-      chapter: meta.chapter || d.chapter || "",
-      taskId: meta.taskId || d.taskId || "",
-      order: meta.order || d.order || 0,
-    };
-    // 兼容旧摘要：open_loops 表示本章结束时仍开放，但不因“缺席”自动关闭。
-    for (const raw of Array.isArray(d.open_loops) ? d.open_loops : []) {
-      const found = findLoopRecord(records, raw, normalizeLoopSummary(raw));
-      applyLoopEvent(records, raw, found?.status === "deferred" ? "deferred" : "open", eventMeta);
-    }
-    for (const raw of Array.isArray(d.opened_loops) ? d.opened_loops : []) {
-      applyLoopEvent(records, raw, "open", eventMeta);
-    }
-    for (const raw of Array.isArray(d.advanced_loops) ? d.advanced_loops : []) {
-      applyLoopEvent(records, raw, "open", eventMeta);
-    }
-    for (const raw of Array.isArray(d.deferred_loops) ? d.deferred_loops : []) {
-      applyLoopEvent(records, raw, "deferred", eventMeta);
-    }
-    for (const raw of Array.isArray(d.resolved_loops) ? d.resolved_loops : []) {
-      applyLoopEvent(records, raw, "resolved", eventMeta);
-    }
-    for (const raw of Array.isArray(d.abandoned_loops) ? d.abandoned_loops : []) {
-      applyLoopEvent(records, raw, "abandoned", eventMeta);
-    }
-    return records;
+  function mergeContinuityIssues(...args) {
+    return MemoryReducers().mergeContinuityIssues(...args);
   }
 
-  function rebuildPlotLoopsFromMemory(project) {
-    const records = [];
-    for (const d of project.memoryRoll || []) applyDigestLoopEvents(records, d);
-    project.plotLoops = records;
-    project.continuityMeta = { ...(project.continuityMeta || {}), loopSchema: 1, loopsMigratedAt: Date.now() };
-    return records;
+  function rebuildContinuityIssuesFromMemory(...args) {
+    return MemoryReducers().rebuildContinuityIssuesFromMemory(...args);
   }
 
-  function ensurePlotLoops(project) {
-    if (
-      Array.isArray(project.plotLoops) &&
-      (project.plotLoops.length > 0 || project.continuityMeta?.loopSchema === 1)
-    ) {
-      project.continuityMeta = {
-        ...(project.continuityMeta || {}),
-        loopSchema: 1,
-      };
-      return project.plotLoops;
-    }
-    if (project.continuityMeta?.loopSchema !== 1) {
-      return rebuildPlotLoopsFromMemory(project);
-    }
-    project.plotLoops = [];
-    return project.plotLoops;
+  function getActiveContinuityIssues(...args) {
+    return MemoryReducers().getActiveContinuityIssues(...args);
   }
 
-  function mergePlotLoops(project, digest, meta = {}) {
-    const records = ensurePlotLoops(project);
-    applyDigestLoopEvents(records, digest, meta);
-    project.plotLoops = records;
-    project.continuityMeta = { ...(project.continuityMeta || {}), loopSchema: 1, loopsUpdatedAt: Date.now() };
-    return records;
+  function buildContinuityWarningBlock(...args) {
+    return MemoryReducers().buildContinuityWarningBlock(...args);
   }
 
-  function getActivePlotLoops(project, task = null, limit = 16) {
-    const records = ensurePlotLoops(project).filter((x) => x && ["open", "deferred"].includes(x.status));
-    const query = [task?.chapter_title, task?.goal, task?.conflict, ...(task?.beats || []), ...(task?.must_include || [])]
-      .filter(Boolean)
-      .join(" ");
-    const scored = records.map((rec) => {
-      const summary = String(rec.summary || "");
-      let relevance = 0;
-      if (query && summary && (query.includes(summary) || summary.includes(query))) relevance += 8;
-      for (const token of summary.match(/[\u4e00-\u9fff]{2,4}|[a-z0-9_]+/gi) || []) {
-        if (query.includes(token)) relevance += 1;
-      }
-      return { rec, relevance };
-    });
-    scored.sort(
-      (a, b) =>
-        b.relevance - a.relevance ||
-        (Number(b.rec.lastOrder) || 0) - (Number(a.rec.lastOrder) || 0) ||
-        (Number(b.rec.updatedAt) || 0) - (Number(a.rec.updatedAt) || 0)
-    );
-    return scored.slice(0, limit).map((x) => x.rec);
+  function ensureEntityStates(...args) {
+    return MemoryReducers().ensureEntityStates(...args);
   }
 
-  function normalizeIssueSummary(raw) {
-    if (raw && typeof raw === "object") {
-      return String(raw.summary || raw.warning || raw.text || raw.message || "").trim();
-    }
-    return String(raw || "").trim();
+  function mergeEntityStates(...args) {
+    return MemoryReducers().mergeEntityStates(...args);
   }
 
-  function stableIssueId(raw) {
-    return stableLoopId(normalizeIssueSummary(raw)).replace(/^loop_/, "issue_");
+  function rebuildEntityStatesFromMemory(...args) {
+    return MemoryReducers().rebuildEntityStatesFromMemory(...args);
   }
 
-  function issueIdFromEvent(raw) {
-    if (raw && typeof raw === "object") {
-      return String(raw.issue_id || raw.issueId || raw.id || "").trim() || stableIssueId(raw);
-    }
-    return stableIssueId(raw);
+  function collectOpenLoops(...args) {
+    return MemoryReducers().collectOpenLoops(...args);
   }
 
-  function findContinuityIssue(records, raw) {
-    const id = raw && typeof raw === "object" ? String(raw.issue_id || raw.issueId || raw.id || "").trim() : "";
-    if (id) {
-      const byId = records.find((x) => x.id === id);
-      if (byId) return byId;
-    }
-    const key = normalizeLoopKey(normalizeIssueSummary(raw));
-    return records.find((x) => normalizeLoopKey(x.summary) === key) || null;
+  function collectMustCarry(...args) {
+    return MemoryReducers().collectMustCarry(...args);
   }
 
-  function applyContinuityIssueEvents(records, digest, meta = {}) {
-    const d = digest && typeof digest === "object" ? digest : {};
-    const eventMeta = {
-      chapter: meta.chapter || d.chapter || "",
-      taskId: meta.taskId || d.taskId || "",
-      order: Number(meta.order || d.order) || 0,
-    };
-    for (const raw of Array.isArray(d.continuity_warnings) ? d.continuity_warnings : []) {
-      const summary = normalizeIssueSummary(raw);
-      if (!summary) continue;
-      let rec = findContinuityIssue(records, raw);
-      const requestedSeverity = raw && typeof raw === "object" ? String(raw.severity || "major") : "major";
-      const severity = ["blocker", "major", "minor", "info"].includes(requestedSeverity)
-        ? requestedSeverity
-        : "major";
-      if (!rec) {
-        rec = {
-          id: issueIdFromEvent(raw),
-          type: raw && typeof raw === "object" ? String(raw.type || "general") : "general",
-          severity,
-          summary,
-          entity: raw && typeof raw === "object" ? String(raw.entity || "") : "",
-          evidence: raw && typeof raw === "object" ? String(raw.evidence || "").slice(0, 180) : "",
-          expected: raw && typeof raw === "object" ? String(raw.expected || "").slice(0, 180) : "",
-          suggestion: raw && typeof raw === "object" ? String(raw.suggestion || "").slice(0, 180) : "",
-          status: "open",
-          firstChapter: eventMeta.chapter,
-          firstTaskId: eventMeta.taskId,
-          firstOrder: eventMeta.order,
-          lastChapter: eventMeta.chapter,
-          lastTaskId: eventMeta.taskId,
-          lastOrder: eventMeta.order,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        records.push(rec);
-      } else {
-        rec.type = raw?.type || rec.type;
-        rec.severity = severity;
-        rec.summary = summary;
-        rec.entity = raw?.entity || rec.entity;
-        rec.evidence = raw?.evidence || rec.evidence;
-        rec.expected = raw?.expected || rec.expected;
-        rec.suggestion = raw?.suggestion || rec.suggestion;
-        rec.status = "open";
-        rec.lastChapter = eventMeta.chapter || rec.lastChapter;
-        rec.lastTaskId = eventMeta.taskId || rec.lastTaskId;
-        rec.lastOrder = eventMeta.order || rec.lastOrder;
-        rec.updatedAt = Date.now();
-      }
-    }
-    for (const [field, status] of [
-      ["handled_warnings", "handled"],
-      ["ignored_warnings", "ignored"],
-    ]) {
-      for (const raw of Array.isArray(d[field]) ? d[field] : []) {
-        const rec = findContinuityIssue(records, raw);
-        if (!rec) continue;
-        rec.status = status;
-        rec.resolution = raw && typeof raw === "object" ? String(raw.resolution || raw.reason || "") : "";
-        rec.resolvedChapter = eventMeta.chapter;
-        rec.resolvedTaskId = eventMeta.taskId;
-        rec.resolvedOrder = eventMeta.order;
-        rec.updatedAt = Date.now();
-      }
-    }
-    return records;
+  function mergeStoryState(...args) {
+    return MemoryReducers().mergeStoryState(...args);
   }
 
-  function rebuildContinuityIssuesFromMemory(project) {
-    const records = [];
-    for (const d of project.memoryRoll || []) applyContinuityIssueEvents(records, d);
-    project.continuityIssues = records;
-    project.continuityMeta = { ...(project.continuityMeta || {}), issueSchema: 1, issuesMigratedAt: Date.now() };
-    return records;
-  }
-
-  function ensureContinuityIssues(project) {
-    if (
-      Array.isArray(project.continuityIssues) &&
-      (project.continuityIssues.length > 0 || project.continuityMeta?.issueSchema === 1)
-    ) {
-      project.continuityMeta = {
-        ...(project.continuityMeta || {}),
-        issueSchema: 1,
-      };
-      return project.continuityIssues;
-    }
-    if (project.continuityMeta?.issueSchema !== 1) {
-      return rebuildContinuityIssuesFromMemory(project);
-    }
-    project.continuityIssues = [];
-    return project.continuityIssues;
-  }
-
-  function mergeContinuityIssues(project, digest, meta = {}) {
-    const records = ensureContinuityIssues(project);
-    applyContinuityIssueEvents(records, digest, meta);
-    project.continuityIssues = records;
-    project.continuityMeta = { ...(project.continuityMeta || {}), issueSchema: 1, issuesUpdatedAt: Date.now() };
-    return records;
-  }
-
-  function getActiveContinuityIssues(project, limit = 8) {
-    const rank = { blocker: 0, major: 1, minor: 2, info: 3 };
-    return ensureContinuityIssues(project)
-      .filter((x) => x?.status === "open")
-      .sort(
-        (a, b) =>
-          (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9) ||
-          (Number(b.lastOrder) || 0) - (Number(a.lastOrder) || 0) ||
-          (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0)
-      )
-      .slice(0, limit);
-  }
-
-  function buildContinuityWarningBlock(project, limit = 8) {
-    const issues = getActiveContinuityIssues(project, limit);
-    if (!issues.length) return "";
-    return `【连续性风险·写前必须规避】\n${issues
-      .map(
-        (x, i) =>
-          `${i + 1}. [${x.id} ${x.severity}/${x.type}] ${x.summary}${x.suggestion ? `｜建议:${x.suggestion}` : ""}`
-      )
-      .join("\n")}`;
-  }
-
-  const ENTITY_STATE_FIELDS = [
-    "type",
-    "location",
-    "condition",
-    "power",
-    "status",
-    "faction",
-    "possessions",
-    "relationships",
-    "notes",
-  ];
-
-  function applyEntityStateDigest(project, digest, meta = {}) {
-    project.entityStates = project.entityStates && typeof project.entityStates === "object" ? project.entityStates : {};
-    project.timelineEvents = Array.isArray(project.timelineEvents) ? project.timelineEvents : [];
-    const d = digest && typeof digest === "object" ? digest : {};
-    const eventMeta = {
-      chapter: meta.chapter || d.chapter || "",
-      taskId: meta.taskId || d.taskId || "",
-      order: Number(meta.order || d.order) || 0,
-    };
-    for (const raw of Array.isArray(d.entity_states) ? d.entity_states : []) {
-      if (!raw || typeof raw !== "object") continue;
-      const entity = String(raw.entity || raw.name || "").trim();
-      if (!entity) continue;
-      const prev = project.entityStates[entity] || { entity, history: [] };
-      const before = {};
-      const next = { ...prev, entity, history: Array.isArray(prev.history) ? prev.history.slice() : [] };
-      let changed = false;
-      for (const field of ENTITY_STATE_FIELDS) {
-        if (raw[field] === undefined || raw[field] === null || raw[field] === "") continue;
-        before[field] = prev[field];
-        const value = Array.isArray(raw[field]) ? [...raw[field]] : raw[field];
-        if (JSON.stringify(prev[field]) !== JSON.stringify(value)) changed = true;
-        next[field] = value;
-      }
-      if (changed && prev.lastChapter) {
-        next.history.push({
-          ...before,
-          chapter: prev.lastChapter,
-          taskId: prev.lastTaskId || "",
-          order: prev.lastOrder || 0,
-          replacedAt: Date.now(),
-        });
-        if (next.history.length > 30) next.history = next.history.slice(-30);
-      }
-      next.lastChapter = eventMeta.chapter || prev.lastChapter || "";
-      next.lastTaskId = eventMeta.taskId || prev.lastTaskId || "";
-      next.lastOrder = eventMeta.order || prev.lastOrder || 0;
-      next.evidence = String(raw.evidence || prev.evidence || "").slice(0, 180);
-      next.updatedAt = Date.now();
-      project.entityStates[entity] = next;
-    }
-    for (const raw of Array.isArray(d.timeline_events) ? d.timeline_events : []) {
-      if (!raw || typeof raw !== "object") continue;
-      const event = String(raw.event || raw.summary || "").trim();
-      if (!event) continue;
-      const id =
-        String(raw.id || raw.event_id || "").trim() ||
-        stableLoopId(`${eventMeta.order}|${raw.time || ""}|${event}`).replace(/^loop_/, "event_");
-      const row = {
-        id,
-        time: String(raw.time || "").slice(0, 80),
-        event: event.slice(0, 180),
-        location: String(raw.location || "").slice(0, 100),
-        entities: Array.isArray(raw.entities) ? raw.entities.slice(0, 12) : [],
-        evidence: String(raw.evidence || "").slice(0, 180),
-        chapter: eventMeta.chapter,
-        taskId: eventMeta.taskId,
-        order: eventMeta.order,
-        updatedAt: Date.now(),
-      };
-      const existing = project.timelineEvents.findIndex((x) => x.id === id);
-      if (existing >= 0) project.timelineEvents[existing] = row;
-      else project.timelineEvents.push(row);
-    }
-    if (project.timelineEvents.length > 240) project.timelineEvents = project.timelineEvents.slice(-240);
-  }
-
-  function rebuildEntityStatesFromMemory(project) {
-    project.entityStates = {};
-    project.timelineEvents = [];
-    for (const digest of project.memoryRoll || []) applyEntityStateDigest(project, digest);
-    project.continuityMeta = { ...(project.continuityMeta || {}), entitySchema: 1, entitiesMigratedAt: Date.now() };
-    return project.entityStates;
-  }
-
-  function ensureEntityStates(project) {
-    if (
-      project.entityStates &&
-      typeof project.entityStates === "object" &&
-      !Array.isArray(project.entityStates) &&
-      (Object.keys(project.entityStates).length > 0 || project.continuityMeta?.entitySchema === 1)
-    ) {
-      project.continuityMeta = {
-        ...(project.continuityMeta || {}),
-        entitySchema: 1,
-      };
-      return project.entityStates;
-    }
-    if (project.continuityMeta?.entitySchema !== 1) {
-      rebuildEntityStatesFromMemory(project);
-      return project.entityStates;
-    }
-    project.entityStates = {};
-    return project.entityStates;
-  }
-
-  function mergeEntityStates(project, digest, meta = {}) {
-    ensureEntityStates(project);
-    applyEntityStateDigest(project, digest, meta);
-    project.continuityMeta = { ...(project.continuityMeta || {}), entitySchema: 1, entitiesUpdatedAt: Date.now() };
-    return project.entityStates;
+  function rebuildStoryStateFromMemory(...args) {
+    return MemoryReducers().rebuildStoryStateFromMemory(...args);
   }
 
   function buildEntityStateBlock(project, task = null, limit = 12) {
@@ -604,6 +210,8 @@ window.NOVEL_CONTEXT = (() => {
 
   function buildStyleVoiceBlock(project, task = null) {
     const style = project.styleBible && typeof project.styleBible === "object" ? project.styleBible : {};
+    const measuredProfile =
+      project.styleProfile || window.NOVEL_CRAFT?.deriveStyleProfile?.(project.chapters || [], { limit: 6 });
     const query = [task?.goal, task?.conflict, task?.pov, ...(task?.beats || []), ...(task?.must_include || [])]
       .filter(Boolean)
       .join(" ");
@@ -633,114 +241,14 @@ window.NOVEL_CONTEXT = (() => {
       style.examples?.length
         ? `风格样例（只模仿节奏，不复制内容）:${style.examples.slice(0, 2).map((x) => truncate(x, 180)).join(" / ")}`
         : "",
+      measuredProfile?.guidance?.length
+        ? `实测风格轮廓（软约束）:${measuredProfile.guidance.join("；")}`
+        : "",
     ].filter(Boolean);
     return lines.length > 1 ? lines.join("\n") : "";
   }
 
   /** 从全部摘要收集未收回钩子（越新越优先，去重） */
-  function collectOpenLoops(memory, limit = 16) {
-    const out = [];
-    const seen = new Set();
-    const list = Array.isArray(memory) ? memory : [];
-    for (let i = list.length - 1; i >= 0; i--) {
-      const m = list[i];
-      const loops = Array.isArray(m?.open_loops) ? m.open_loops : [];
-      for (const raw of loops) {
-        const s = String(raw || "").trim();
-        if (!s) continue;
-        const key = s.slice(0, 40);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(s);
-        if (out.length >= limit) return out;
-      }
-    }
-    return out;
-  }
-
-  /** 从摘要收集必须延续的事实 */
-  function collectMustCarry(memory, limit = 20) {
-    const out = [];
-    const seen = new Set();
-    const list = Array.isArray(memory) ? memory : [];
-    for (let i = list.length - 1; i >= 0; i--) {
-      const m = list[i];
-      const bags = [
-        ...(Array.isArray(m?.must_carry) ? m.must_carry : []),
-        ...(Array.isArray(m?.new_info) ? m.new_info : []),
-      ];
-      for (const raw of bags) {
-        const s = String(raw || "").trim();
-        if (!s || s.length < 2) continue;
-        const key = s.slice(0, 36);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(s);
-        if (out.length >= limit) return out;
-      }
-    }
-    return out;
-  }
-
-  /**
-   * 确定性合并 storyState（不额外调模型，省反代额度）。
-   * digest 为最新一章摘要 JSON。
-   */
-  function mergeStoryState(project, digest) {
-    const prev = project.storyState && typeof project.storyState === "object" ? project.storyState : {};
-    const d = digest && typeof digest === "object" ? digest : {};
-    mergePlotLoops(project, d, { chapter: d.chapter, taskId: d.taskId, order: d.order });
-    mergeContinuityIssues(project, d, { chapter: d.chapter, taskId: d.taskId, order: d.order });
-    const openLoops = getActivePlotLoops(project, null, 20).map((x) => x.summary);
-    const facts = collectMustCarry([...(project.memoryRoll || []), d], 24);
-    const stateStr =
-      typeof d.state === "string"
-        ? d.state
-        : d.state && typeof d.state === "object"
-          ? Object.entries(d.state)
-              .map(([k, v]) => `${k}:${v}`)
-              .join("；")
-          : prev.protagonistState || "";
-
-    project.storyState = {
-      updatedAt: Date.now(),
-      lastChapter: d.chapter || d.title || prev.lastChapter || "",
-      chapterCount: writtenChapters(project).length,
-      protagonistState: stateStr || prev.protagonistState || "",
-      openLoops,
-      establishedFacts: facts,
-      recentHook: Array.isArray(d.open_loops) && d.open_loops[0] ? d.open_loops[0] : prev.recentHook || "",
-      endingNote: d.ending_hook_status || d.hook_left || prev.endingNote || "",
-      powerOrSystem: d.power_or_system || d.system_state || prev.powerOrSystem || "",
-      location: d.location || prev.location || "",
-      timeline: d.timeline || prev.timeline || "",
-    };
-    return project.storyState;
-  }
-
-  function rebuildStoryStateFromMemory(project) {
-    ensurePlotLoops(project);
-    ensureContinuityIssues(project);
-    project.storyState = {
-      updatedAt: Date.now(),
-      lastChapter: "",
-      chapterCount: writtenChapters(project).length,
-      protagonistState: "",
-      openLoops: [],
-      establishedFacts: [],
-      recentHook: "",
-      endingNote: "",
-      powerOrSystem: "",
-      location: "",
-      timeline: "",
-    };
-    for (const d of project.memoryRoll || []) {
-      mergeStoryState(project, d);
-    }
-    return project.storyState;
-  }
-
-  /** 按章序猜测当前卷 */
   function findVolumeForOrder(project, order) {
     const vols = project.spine?.volumes || [];
     if (!vols.length) return null;
@@ -885,8 +393,8 @@ window.NOVEL_CONTEXT = (() => {
     let match = normalized.match(/^(.*?)([-+]?\d+(?:\.\d+)?)(亿|万|千|百)?(.*)$/);
     let number;
     let magnitude = "";
-    let prefix = "";
-    let suffix = "";
+    let prefix;
+    let suffix;
     if (match) {
       prefix = match[1] || "";
       number = Number(match[2]);
@@ -1026,44 +534,70 @@ window.NOVEL_CONTEXT = (() => {
     return { added, conflicts, total: canon.facts.length };
   }
 
-  function selectCanonFacts(project, task = null, limit) {
-    const max = limit || window.NOVEL_DEFAULTS?.canonMaxFactsInPrompt || 36;
-    const facts = (project.detailCanon?.facts || []).filter((f) => f.status !== "superseded");
-    const taskBlob = [
-      task?.chapter_title,
-      task?.goal,
-      task?.conflict,
-      task?.pov,
-      ...(task?.beats || []),
-      ...(task?.must_include || []),
-      ...(task?.must_not || []),
-      task?.hook_end,
-    ]
-      .filter(Boolean)
-      .join(" ");
-    const rank = { number: 42, name: 38, system: 34, item: 28, location: 26, relationship: 24, other: 12 };
-    const scored = facts.map((fact, index) => {
-      const key = String(fact.key || "");
-      const entity = String(fact.entity || key.split(".")[0] || "");
-      const searchable = `${key} ${entity} ${fact.value || ""}`;
-      let score = rank[fact.category] ?? 12;
-      if (fact.scope === "global" || fact.global === true || Number(fact.priority) >= 100) score += 1000;
-      if (entity && taskBlob.includes(entity)) score += 500;
-      if (key && taskBlob.includes(key)) score += 700;
-      if (task?.pov && entity === task.pov) score += 600;
-      for (const token of searchable.match(/[\u4e00-\u9fff]{2,4}|[a-z0-9_]+/gi) || []) {
-        if (taskBlob.includes(token)) score += 12;
-      }
-      if (fact.locked !== false) score += 5;
-      return { fact, score, index };
-    });
-    scored.sort((a, b) => b.score - a.score || a.index - b.index);
-    return {
-      facts: scored.slice(0, max).map((x) => x.fact),
-      omitted: Math.max(0, facts.length - max),
-      total: facts.length,
-      scores: scored.slice(0, max).map((x) => ({ key: x.fact.key, score: x.score })),
-    };
+  let contextEvidence = null;
+
+  function ContextEvidence() {
+    const factory = window.NOVEL_CONTEXT_EVIDENCE;
+    if (!factory?.create) throw new Error("NOVEL_CONTEXT_EVIDENCE 未在 context.js 前加载");
+    if (!contextEvidence) {
+      contextEvidence = factory.create({
+        getDefaults: () => window.NOVEL_DEFAULTS || {},
+        buildEntityStateBlock,
+        buildTimelineBlock,
+        findPrevWrittenChapter,
+        getActivePlotLoops,
+        buildStyleVoiceBlock,
+        estimateTokens,
+        clipToDualBudget,
+      });
+    }
+    return contextEvidence;
+  }
+
+  function selectCanonFacts(...args) {
+    return ContextEvidence().selectCanonFacts(...args);
+  }
+
+  function recordContextBuild(project, task, chapter, stage, packed, startedAt) {
+    const observer = window.NOVEL_OBSERVABILITY;
+    const meta = packed?.meta || {};
+    observer?.record?.(
+      "context",
+      {
+        stage,
+        durationMs: observer.elapsedMs?.(startedAt) || 0,
+        taskId: task?.id || chapter?.taskId || "",
+        chapterId: chapter?.id || "",
+        chars: meta.chars,
+        tokens: meta.tokens,
+        budget: meta.budget,
+        tokenBudget: meta.tokenBudget,
+        used: meta.used,
+        omitted: meta.omitted,
+        truncated: meta.truncated,
+        ragHits: meta.rag?.hits,
+      },
+      project
+    );
+  }
+
+  function buildProductionEvidencePack(project, task, chapter, opts = {}) {
+    const observer = window.NOVEL_OBSERVABILITY;
+    const startedAt = observer?.startTimer?.();
+    const stage = opts.stage || "production-evidence";
+    try {
+      const packed = ContextEvidence().buildProductionEvidencePack(project, task, chapter, opts);
+      recordContextBuild(project, task, chapter, stage, packed, startedAt);
+      return packed;
+    } catch (error) {
+      observer?.captureFailure?.(project, error, {
+        chapter,
+        task,
+        stage,
+        category: "retrieval",
+      });
+      throw error;
+    }
   }
 
   function buildCanonBlock(project, limit, task = null) {
@@ -1277,6 +811,8 @@ ${tail}`;
    * 为写章/续写装配 user 包（已含各区块，system 另传）。
    */
   function packForWrite(project, task, opts = {}) {
+    const observer = window.NOVEL_OBSERVABILITY;
+    const startedAt = observer?.startTimer?.();
     const budget = opts.budget || window.NOVEL_DEFAULTS?.contextBudgetChars || 16000;
     const tokenBudget =
       opts.tokenBudget || window.NOVEL_DEFAULTS?.contextBudgetTokens || Math.max(4000, Math.ceil(budget * 0.8));
@@ -1443,107 +979,7 @@ ${tail}`;
       blocks.push({ k: "instr", t: `【作者本轮指令·优先服从】\n${opts.instruction}`, keep: true });
     }
 
-    // 预算裁剪：高优先级先装；keep 块尽量硬保
-    const priority = [
-      "lock",
-      "task",
-      "beat",
-      "opening",
-      "debt",
-      "instr",
-      "storyline",
-      "canon",
-      "warnings",
-      "style",
-      "rag",
-      "progress",
-      "story",
-      "entity",
-      "timeline",
-      "prev",
-      "loops",
-      "body",
-      "appear",
-      "memory",
-      "cast",
-      "world",
-      "foreshadow",
-    ];
-    let packed = "";
-    const used = new Set();
-    const truncated = [];
-    const omitted = [];
-    const hardKeep = new Set([
-      "body",
-      "task",
-      "beat",
-      "opening",
-      "debt",
-      "instr",
-      "lock",
-      "prev",
-      "story",
-      "entity",
-      "style",
-      "storyline",
-      "canon",
-      "warnings",
-      "rag",
-    ]);
-    const minimumChars = {
-      lock: 250,
-      task: 550,
-      beat: 400,
-      opening: 120,
-      debt: 180,
-      instr: 250,
-      storyline: 450,
-      canon: 650,
-      warnings: 250,
-      rag: 500,
-      story: 450,
-      entity: 450,
-      style: 350,
-      prev: 650,
-      body: 350,
-    };
-    const orderedBlocks = priority.map((key) => blocks.find((x) => x.k === key)).filter(Boolean);
-    for (let blockIndex = 0; blockIndex < orderedBlocks.length; blockIndex++) {
-      const b = orderedBlocks[blockIndex];
-      const key = b.k;
-      const sep = packed ? "\n\n" : "";
-      const futureRequired = orderedBlocks.slice(blockIndex + 1).filter((x) => hardKeep.has(x.k));
-      let reservedChars = 0;
-      let reservedTokens = 0;
-      for (const future of futureRequired) {
-        const minChars = Math.min(String(future.t || "").length, minimumChars[future.k] || 220);
-        const minText = String(future.t || "").slice(0, minChars);
-        reservedChars += minText.length + 2;
-        reservedTokens += estimateTokens(minText) + 1;
-      }
-      const availableChars = Math.max(0, budget - estimate(packed) - sep.length - reservedChars);
-      const availableTokens = Math.max(0, tokenBudget - estimateTokens(packed) - estimateTokens(sep) - reservedTokens);
-      const full = String(b.t || "");
-      if (full.length <= availableChars && estimateTokens(full) <= availableTokens) {
-        packed += sep + full;
-        used.add(key);
-        continue;
-      }
-      if (b.keep || hardKeep.has(key)) {
-        const fragment = clipToDualBudget(full, availableChars, availableTokens);
-        if (fragment) {
-          packed += sep + fragment;
-          used.add(key);
-          truncated.push({ key, originalChars: full.length, usedChars: fragment.length });
-        } else {
-          omitted.push(key);
-        }
-      } else {
-        omitted.push(key);
-      }
-    }
-
-    // 末尾追加连贯性纪律（短，几乎总装得下）
+    // 硬保留块的预留、双预算裁剪与截断清单由纯预算分配器统一计算。
     const discipline =
       window.NOVEL_CRAFT?.buildDiscipline?.(openingHint) ||
       `【连贯性纪律】
@@ -1552,36 +988,25 @@ ${tail}`;
 3. 已确立事实不得无故推翻；能力/药方按状态递进，禁止每章「第一次终极进化」。
 4. 上章高潮只写后果与余波，禁止重演。
 5. 只输出正文，不要大纲、不要分析、不要自我解释。`;
-    if (
-      estimate(packed) + estimate(discipline) + 4 <= budget &&
-      estimateTokens(packed) + estimateTokens(discipline) + 1 <= tokenBudget
-    ) {
-      packed = packed + "\n\n" + discipline;
-      used.add("discipline");
-    }
+    const allocation = allocateBlocks(blocks, { budget, tokenBudget, discipline });
+    const { packed, used, truncated, omitted, blockStats } = allocation;
 
     const canonSelection = selectCanonFacts(
       project,
       task,
       opts.canonMaxFacts || window.NOVEL_DEFAULTS?.canonMaxFactsInPrompt
     );
-    return {
+    const result = {
       user: packed,
       meta: {
         budget,
         tokenBudget,
-        used: [...used],
+        used,
         chars: estimate(packed),
         tokens: estimateTokens(packed),
         truncated,
         omitted,
-        blocks: blocks.map((b) => ({
-          key: b.k,
-          originalChars: String(b.t || "").length,
-          originalTokens: estimateTokens(b.t || ""),
-          used: used.has(b.k),
-          truncated: truncated.some((x) => x.key === b.k),
-        })),
+        blocks: blockStats,
         canon: {
           selected: canonSelection.facts.map((f) => f.key),
           omitted: canonSelection.omitted,
@@ -1611,8 +1036,18 @@ ${tail}`;
         memoryUsed: memSlice.length,
       },
     };
+    recordContextBuild(project, task, chapter, opts.stage || "write-context", result, startedAt);
+    return result;
   }
 
+  /**
+   * 生产引擎使用的「证据包」。
+   *
+   * packForWrite 保持向后兼容，适合旧版一次性写章；新的分场生产流不能再把
+   * 所有资料平铺成一段 prompt。因此这里把资料按来源和可信度分层，给每一块
+   * 加上 authority 标签，并用确定性的预算分配，避免 RAG 线索挤掉锁定事实。
+   * 这是纯装配函数，不发请求，也不修改 project，方便离线测试和复现上下文。
+   */
   function recordContextManifest(project, task, chapter, packed) {
     const meta = packed?.meta || {};
     const row = {
@@ -1625,9 +1060,11 @@ ${tail}`;
       budget: meta.budget || 0,
       tokens: meta.tokens || 0,
       tokenBudget: meta.tokenBudget || 0,
+      stage: meta.stage || "",
       used: meta.used || [],
       truncated: meta.truncated || [],
       omitted: meta.omitted || [],
+      authority: meta.authority || {},
       blocks: meta.blocks || [],
       canon: meta.canon || {},
       rag: meta.rag || {},
@@ -1810,6 +1247,7 @@ POV:${task?.pov || ""}`;
 
   return {
     packForWrite,
+    buildProductionEvidencePack,
     packForDigest,
     packForContinuityReview,
     mergeGraph,

@@ -25,9 +25,9 @@ const sandbox = {
 };
 
 // load prompts then context
-vm.runInNewContext(fs.readFileSync(path.join(root, "prompts.js"), "utf8"), sandbox);
-vm.runInNewContext(fs.readFileSync(path.join(root, "craft.js"), "utf8"), sandbox);
-vm.runInNewContext(fs.readFileSync(path.join(root, "context.js"), "utf8"), sandbox);
+for (const file of ["runtime-observability.js", "prompts.js", "craft.js", "memory-reducers.js", "context-budget.js", "context-evidence.js", "context.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: path.join(root, file) });
+}
 
 const Ctx = sandbox.window.NOVEL_CONTEXT;
 const Prompts = sandbox.window.NOVEL_PROMPTS;
@@ -119,6 +119,8 @@ assert.ok(packed.user.includes("死刑论") || packed.user.includes("t002") || p
 assert.ok(packed.user.includes("连贯性纪律") || packed.user.includes("不得"), "discipline");
 assert.ok(packed.meta.prevChapterId === "c1", "prev chapter id linked");
 assert.ok(packed.meta.chars <= packed.meta.budget, "within budget");
+assert.equal(project.runtimeDiagnostics.at(-1).type, "context", "context assembly emits a safe timing metric");
+assert.equal(project.runtimeDiagnostics.at(-1).chapterId, "", "empty target chapter has no fabricated identity");
 
 project.chapters[0].beatPlan = {
   scenes: [
@@ -468,3 +470,29 @@ const styleProject = {
 };
 assert.match(Ctx.buildStyleVoiceBlock(styleProject, { goal: "苏清月查案", pov: "苏清月" }), /冷静克制/);
 console.log("entity-state + style-bible: OK");
+
+const evidence = Ctx.buildProductionEvidencePack(
+  {
+    ...stateProject,
+    locks: { logline: "锁定主线", forbidden: ["空转"] },
+    detailCanon: { facts: [{ key: "苏清月.伤势", value: "左臂受伤", locked: true, evidence: "包扎" }] },
+    storyline: { positionSummary: "卷一中段", nextDirection: "追查地下层" },
+    chapters: [{ id: "prev", order: 1, title: "第一章", body: "门在身后合上，警报声没有停。" }],
+  },
+  { id: "t2", order: 2, chapter_title: "第二章", goal: "追查地下层", conflict: "入口被封", hook_end: "门后有人敲门", pov: "苏清月" },
+  { id: "c2", order: 2, title: "第二章", body: "" },
+  {
+    contract: { taskId: "t2", title: "第二章", objective: "找到入口", conflict: "入口被封", pov: "苏清月", hookEnd: "门后有人敲门", scenes: [] },
+    instruction: "强化人物主动选择",
+    currentDraftText: "当前章已经写到门缝前。",
+    budget: 5000,
+    tokenBudget: 4000,
+  }
+);
+assert.match(evidence.user, /【canon\|locked】/);
+assert.match(evidence.user, /【previous\|continuity】/);
+assert.match(evidence.user, /【author\|author】/);
+assert.match(evidence.user, /【current-draft\|working】/);
+assert.ok(evidence.meta.used.includes("canon"));
+assert.ok(evidence.meta.authority.reference.includes("retrieval"));
+console.log("production evidence pack: OK");

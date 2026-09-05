@@ -260,7 +260,14 @@ async fn require_api_token(State(st): State<AppState>, req: Request, next: Next)
         if !header_ok && !cookie_ok {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({"ok": false, "error": "unauthorized"})),
+                Json(json!({
+                    "ok": false,
+                    "error": {
+                        "code": "UNAUTHORIZED",
+                        "message": "unauthorized",
+                        "status": StatusCode::UNAUTHORIZED.as_u16()
+                    }
+                })),
             )
                 .into_response();
         }
@@ -272,6 +279,7 @@ type ApiResult = Result<Json<Value>, ApiError>;
 
 struct ApiError {
     status: StatusCode,
+    code: &'static str,
     message: String,
     /// 若有则直接作为响应体（用于 bookDir/unknown 等结构化错误）
     body: Option<Value>,
@@ -279,19 +287,53 @@ struct ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = self.body.unwrap_or_else(
-            || json!({"error": {"message": self.message, "status": self.status.as_u16()}}),
-        );
+        let body = self.body.unwrap_or_else(|| {
+            json!({
+                "ok": false,
+                "error": {
+                    "code": self.code,
+                    "message": self.message,
+                    "status": self.status.as_u16()
+                }
+            })
+        });
         (self.status, Json(body)).into_response()
+    }
+}
+
+fn default_error_code(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => "INVALID_REQUEST",
+        StatusCode::UNAUTHORIZED => "UNAUTHORIZED",
+        StatusCode::FORBIDDEN => "FORBIDDEN",
+        StatusCode::NOT_FOUND => "NOT_FOUND",
+        StatusCode::CONFLICT => "CONFLICT",
+        StatusCode::PAYLOAD_TOO_LARGE => "PAYLOAD_TOO_LARGE",
+        _ => "INTERNAL_ERROR",
     }
 }
 
 fn err(status: StatusCode, m: impl ToString) -> ApiError {
     ApiError {
         status,
+        code: default_error_code(status),
         message: m.to_string(),
         body: None,
     }
+}
+
+fn storage_write_error(error: anyhow::Error, fallback: StatusCode) -> ApiError {
+    let message = error.to_string();
+    let code = message.split(':').next().unwrap_or("");
+    let status = match code {
+        "BOOK_CONFLICT" | "FILE_CONFLICT" => StatusCode::CONFLICT,
+        "REVISION_REQUIRED" => StatusCode::PRECONDITION_REQUIRED,
+        _ => return err(fallback, error),
+    };
+    err_body(
+        status,
+        json!({"ok": false, "error": {"code": code, "message": message, "status": status.as_u16()}}),
+    )
 }
 
 fn err_body(status: StatusCode, body: Value) -> ApiError {
@@ -302,6 +344,7 @@ fn err_body(status: StatusCode, body: Value) -> ApiError {
         .to_string();
     ApiError {
         status,
+        code: default_error_code(status),
         message,
         body: Some(body),
     }
@@ -648,8 +691,11 @@ async fn put_book(
     Path(slug): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult {
+    if !body.is_object() {
+        return Err(err(StatusCode::BAD_REQUEST, "body must be object"));
+    }
     let v = st.vault.read().await;
-    match v.save_book(&slug, body, true) {
+    match v.save_book_checked(&slug, body) {
         Ok(saved) => Ok(Json(json!({
             "ok": true,
             "slug": slug,
@@ -658,10 +704,11 @@ async fn put_book(
             "mtime": v.book_meta(&slug).ok().and_then(|m| m.get("mtime").cloned()).unwrap_or(json!(0)),
             "saveWarnings": saved.get("_saveWarnings").cloned().unwrap_or(json!([])),
             "chapterBaselines": chapter_baselines(&saved),
+            "bookRevision": saved.get("_bookRevision"),
             "version": VERSION,
             "epoch": content_epoch(),
         }))),
-        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e)),
+        Err(e) => Err(storage_write_error(e, StatusCode::INTERNAL_SERVER_ERROR)),
     }
 }
 
@@ -804,6 +851,8 @@ async fn read_file(
 struct WriteFileBody {
     path: String,
     content: String,
+    #[serde(rename = "expectedRevision")]
+    expected_revision: Option<String>,
 }
 
 async fn write_file(
@@ -812,9 +861,14 @@ async fn write_file(
     Json(body): Json<WriteFileBody>,
 ) -> ApiResult {
     let v = st.vault.read().await;
-    v.write_file(&slug, &body.path, &body.content)
-        .map(Json)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+    v.write_file_checked(
+        &slug,
+        &body.path,
+        &body.content,
+        body.expected_revision.as_deref(),
+    )
+    .map(Json)
+    .map_err(|e| storage_write_error(e, StatusCode::BAD_REQUEST))
 }
 
 #[derive(Deserialize)]
@@ -1042,6 +1096,7 @@ mod tests {
 
         let body = serde_json::to_vec(&json!({
             "id": "large-put",
+            "_bookRevision": created["_bookRevision"],
             "slug": slug,
             "title": "Large PUT",
             "chapters": [],

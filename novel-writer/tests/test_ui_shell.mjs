@@ -120,7 +120,7 @@ for (const status of [0, 199, 300, 409, 500, undefined, "not-a-status"]) {
 }
 assert.equal(UI.safeCssToken("written"), "written");
 assert.equal(UI.safeCssToken("in_progress"), "in_progress");
-assert.equal(UI.safeCssToken('pending\" onmouseover=\"alert(1)'), "pending");
+assert.equal(UI.safeCssToken('pending" onmouseover="alert(1)'), "pending");
 assert.equal(UI.safeCssToken("<img>"), "pending");
 
 assert.deepEqual(

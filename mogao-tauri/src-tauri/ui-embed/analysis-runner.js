@@ -1,5 +1,5 @@
 /**
- * 叙事分析 Runner：切章 → 分块抽取 → 合并图谱（GOAL-ULTIMATE Phase1）。
+ * 叙事分析 Runner：切章 → 分块抽取 → 合并图谱。
  * 本身不强制写 vault；通过 onChunk / hooks.writeExtraction 让外部持久化。
  */
 window.NOVEL_ANALYSIS = (() => {
@@ -314,8 +314,11 @@ window.NOVEL_ANALYSIS = (() => {
           baseUrl: cfg.baseUrl,
           apiKey: cfg.apiKey,
           model: cfg.model,
+          temperature: cfg.temperature,
+          seed: cfg.seed,
           messages,
           signal,
+          diagnosticStage: "analysis-extract",
         });
         const extraction = normalizeExtraction(raw, chunk, i);
         graph = Narrative.mergeGraphs(graph, extraction);

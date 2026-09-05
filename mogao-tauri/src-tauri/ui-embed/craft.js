@@ -459,6 +459,62 @@ window.NOVEL_CRAFT = (() => {
     };
   }
 
+  /**
+   * 从作者已经接受的章节提炼可解释的风格轮廓。
+   * 这是统计校准，不是让模型复制旧文；生产引擎把它作为软约束注入每个场面，
+   * 用来抑制“每章都像同一个模板”的节奏漂移。
+   */
+  function deriveStyleProfile(chapters, opts = {}) {
+    const rows = (Array.isArray(chapters) ? chapters : [])
+      .filter((chapter) => {
+        if (!String(chapter?.body || "").trim()) return false;
+        const status = String(chapter?.production?.status || "");
+        return !status || ["accepted", "accepted_pending_handoff", "done"].includes(status);
+      })
+      .slice()
+      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
+      .slice(-(Math.max(1, Number(opts.limit) || 6)));
+    if (!rows.length) return null;
+    let chars = 0;
+    let paragraphs = 0;
+    let sentences = 0;
+    let sentenceChars = 0;
+    let dialogueChars = 0;
+    let sensory = 0;
+    for (const chapter of rows) {
+      const body = String(chapter.body || "");
+      const compact = body.replace(/\s+/g, "");
+      chars += compact.length;
+      paragraphs += body.split(/\n+/).filter((line) => line.trim()).length;
+      const chunks = compact.split(/[。！？!?；;]/).filter(Boolean);
+      sentences += chunks.length;
+      sentenceChars += chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      dialogueChars += [...compact.matchAll(/[「“"]([^」”"]+)[」”"]/g)].reduce((sum, match) => sum + String(match[1] || "").length, 0);
+      sensory += countSensory(body);
+    }
+    const avgParagraph = paragraphs ? Math.round(chars / paragraphs) : 0;
+    const avgSentence = sentences ? Math.round(sentenceChars / sentences) : 0;
+    const dialogue = chars ? Math.round((dialogueChars / chars) * 100) : 0;
+    const sensoryPerK = chars ? Math.round((sensory / chars) * 1000 * 10) / 10 : 0;
+    return {
+      schemaVersion: 1,
+      sampleChapters: rows.length,
+      chars,
+      averageParagraphChars: avgParagraph,
+      averageSentenceChars: avgSentence,
+      dialogueRate: dialogue / 100,
+      sensoryPerThousandChars: sensoryPerK,
+      rhythm: avgParagraph && avgParagraph < 70 ? "短段落" : avgParagraph > 150 ? "长段落" : "中等段落",
+      guidance: [
+        `段落以${avgParagraph ? `${avgParagraph}字左右` : "适中"}为中位节奏（${avgParagraph && avgParagraph < 70 ? "保持切段" : "避免连续大段"}）`,
+        `对白约占${dialogue}%；对白必须带来信息或选择，不为凑比例`,
+        `每千字约${sensoryPerK}个感官锚点，优先具体物件/声音/触感`,
+        `句子中位约${avgSentence || "适中"}字，长短句交替而非机械等长`,
+      ],
+      at: Date.now(),
+    };
+  }
+
   function evidenceInBody(evidence, body) {
     const ev = String(evidence || "").replace(/\s+/g, "");
     if (ev.length < 2) return false;
@@ -596,6 +652,7 @@ window.NOVEL_CRAFT = (() => {
     lintHumanProse,
     buildUncoveredBeatHint,
     scoreChapterCraft,
+    deriveStyleProfile,
     validateDigest,
     buildDiscipline,
     overlapRatio,

@@ -15,6 +15,11 @@ window.NOVEL_HARNESS = (() => {
   const Pipe = () => window.NOVEL_PIPELINE;
   const Rag = () => window.NOVEL_RAG;
   const Ctx = () => window.NOVEL_CONTEXT;
+  function ChapterState() {
+    const state = window.NOVEL_CHAPTER_STATE;
+    if (!state) throw new Error("NOVEL_CHAPTER_STATE 未在 harness.js 前加载");
+    return state;
+  }
 
   function log(project, msg) {
     Pipe().log(project, `[harness] ${msg}`);
@@ -90,7 +95,7 @@ window.NOVEL_HARNESS = (() => {
     }
 
     const st = task.status || "pending";
-    let ragPack = null;
+    let ragPack;
 
     // --- write path ---
     if (hooks.forceRewrite || !["written", "digested", "done"].includes(st)) {
@@ -157,8 +162,7 @@ window.NOVEL_HARNESS = (() => {
         } catch (e) {
           task.lastError = e.message || String(e);
           task.lastErrorStage = "review";
-          ch.handoffStatus = "stale";
-          ch.handoffError = e.message || String(e);
+          ChapterState().markHandoffStale(ch, task, { reason: e.message || String(e) });
           throw e;
         }
       }
@@ -168,8 +172,7 @@ window.NOVEL_HARNESS = (() => {
       } catch (e) {
         task.lastError = e.message || String(e);
         task.lastErrorStage = "digest";
-        ch.handoffStatus = "stale";
-        ch.handoffError = e.message || String(e);
+        ChapterState().markHandoffStale(ch, task, { reason: e.message || String(e) });
         throw e;
       }
     }
@@ -177,12 +180,7 @@ window.NOVEL_HARNESS = (() => {
     if (task.status === "digested") {
       hooks.onStatus?.("graphing");
       await P.extractGraphDelta(project, cfg, ch, hooks);
-      task.status = "done";
-      task.lastError = "";
-      task.lastErrorStage = "";
-      ch.handoffStatus = "done";
-      ch.handoffAt = Date.now();
-      ch.handoffError = "";
+      ChapterState().completeHandoff(ch, task);
 
       // 更新索引（新章正文 + 新 digest/canon）
       hooks.onStatus?.("index");

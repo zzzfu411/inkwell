@@ -5,7 +5,6 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const source = fs.readFileSync(path.join(root, "store.js"), "utf8");
 const values = new Map();
 const localStorage = {
   getItem(key) {
@@ -24,8 +23,23 @@ const context = {
   crypto: { randomUUID: () => "test-id" },
   console,
 };
-vm.runInNewContext(source, context, { filename: "store.js" });
+for (const file of ["chapter-state.js", "project-migrations.js", "production-state.js", "store.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), context, { filename: file });
+}
 const Store = context.window.NOVEL_STORE;
+
+const fresh = Store.defaultProject();
+assert.equal(fresh.schemaVersion, 1);
+assert.deepEqual(Array.from(fresh.schemaMigrationHistory), []);
+
+localStorage.setItem(
+  Store.KEY,
+  JSON.stringify({ projects: [{ id: "legacy-cache", chapters: [], tasks: [] }], activeId: "legacy-cache" })
+);
+const migratedCache = Store.loadAll();
+assert.equal(migratedCache.projects[0].schemaVersion, 1);
+assert.equal(migratedCache.projects[0].schemaMigrationHistory[0].id, "project:0->1");
+localStorage.removeItem(Store.KEY);
 
 const pending = [
   {

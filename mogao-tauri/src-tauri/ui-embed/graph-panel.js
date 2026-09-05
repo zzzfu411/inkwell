@@ -72,6 +72,14 @@
     return String(value?.label ?? value ?? fallback);
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
   /** 关系表：把 source/target 换成人物显示名，并合并重复出现次数。 */
   function buildEdgeRows(scopedGraph, filteredGraph) {
     const findNode = (ref) =>
@@ -139,6 +147,64 @@
     return `人物 ${characters} · 关系 ${relationships} · 章节 ${chapterCount}${selected}`;
   }
 
+  function renderProfileHtml(profile, selectedId) {
+    if (!selectedId) return "<p class='muted'>从人物列表选择一人查看</p>";
+    if (!profile) return "<p class='muted'>筛选范围内没有该人物档案</p>";
+    const neighbors = (profile.neighbors || [])
+      .map(
+        (neighbor) =>
+          `<li><strong>${escapeHtml(neighbor.label || "未命名")}</strong> · ${escapeHtml(neighbor.relationship || "未标注关系")} <span class="muted">${escapeHtml(neighbor.chapter || "")}</span></li>`
+      )
+      .join("");
+    return `<h4>${escapeHtml(profile.label || selectedId)}</h4>
+      <p class="muted">关系度数 ${profile.degree ?? 0}${profile.sect ? ` · ${escapeHtml(profile.sect)}` : ""}${profile.chapter ? ` · 首现 ${escapeHtml(profile.chapter)}` : ""}</p>
+      <ul class="an-neigh">${neighbors || "<li class='muted'>筛选范围内没有关联人物</li>"}</ul>`;
+  }
+
+  function renderTracksHtml(model) {
+    if (!model) return "<p class='muted'>关系演化模块未加载</p>";
+    if (model.kind === "empty") {
+      return `<p class='muted'>${model.scoped ? "该人物在筛选范围内暂无关系演化证据" : "筛选范围内暂无关系演化数据"}</p>`;
+    }
+    if (model.kind === "grouped") {
+      return model.groups
+        .map((track) => {
+          const events = track.events
+            .map((entry) => `<li>${escapeHtml(entry.chapter)} · ${escapeHtml(entry.label)}</li>`)
+            .join("");
+          return `<div class="an-track"><h5>${escapeHtml(track.title)}</h5><ul>${events || "<li class='muted'>暂无证据</li>"}</ul></div>`;
+        })
+        .join("");
+    }
+    return model.groups
+      .map(
+        (track) =>
+          `<div class="an-track"><p>${escapeHtml(track.source)} → ${escapeHtml(track.target)} · ${escapeHtml(track.label)} <span class="muted">${escapeHtml(track.chapter)}</span></p></div>`
+      )
+      .join("");
+  }
+
+  function renderEdgeRowsHtml(rows) {
+    return (rows || []).length
+      ? rows
+          .map(
+            (row) =>
+              `<tr><td>${escapeHtml(row.source)}</td><td>${escapeHtml(row.relationship)}</td><td>${escapeHtml(row.target)}</td><td>${escapeHtml(row.evidence)}${row.occurrence > 1 ? ` ×${row.occurrence}` : ""}</td></tr>`
+          )
+          .join("")
+      : `<tr><td colspan="4" class="muted">筛选范围内暂无关系证据</td></tr>`;
+  }
+
+  function renderNodeButtonsHtml(buttons) {
+    if (!(buttons || []).length) return `<p class="muted">筛选范围内暂无人物</p>`;
+    return buttons
+      .map(
+        (item) =>
+          `<button type="button" class="an-node-btn${item.active ? " active" : ""}" aria-pressed="${item.active}" data-graph-node="${escapeHtml(item.id)}">${escapeHtml(item.text)}</button>`
+      )
+      .join("");
+  }
+
   window.NOVEL_GRAPH_PANEL = {
     EDGE_LIMIT,
     TRACK_LIMIT,
@@ -149,5 +215,9 @@
     buildNodeButtons,
     buildTracks,
     statsLine,
+    renderProfileHtml,
+    renderTracksHtml,
+    renderEdgeRowsHtml,
+    renderNodeButtonsHtml,
   };
 })();

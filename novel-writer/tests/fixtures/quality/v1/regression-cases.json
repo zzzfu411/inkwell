@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "empty-body",
+      "body": "",
+      "expectedBlocker": "empty-body"
+    },
+    {
+      "id": "severely-short",
+      "body": "他推开门。",
+      "targetChars": 1400,
+      "expectedBlocker": "severely-short"
+    },
+    {
+      "id": "leaked-scene-label",
+      "body": "场面一：他推开门，沿着走廊寻找证据。",
+      "targetChars": 20,
+      "expectedBlocker": "meta-label-in-body"
+    },
+    {
+      "id": "copy-loop",
+      "body": "他看着眼前的一切却没有回答。他看着眼前的一切却没有回答。他看着眼前的一切却没有回答。他看着眼前的一切却没有回答。他看着眼前的一切却没有回答。他看着眼前的一切却没有回答。",
+      "targetChars": 80,
+      "maxRepeatedNgramRate": 1,
+      "minRepeatedNgramRate": 0.1
+    }
+  ]
+}

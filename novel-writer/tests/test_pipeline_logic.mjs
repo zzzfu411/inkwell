@@ -71,9 +71,14 @@ const sandbox = {
   console,
 };
 
+for (const file of ["chapter-state.js", "production-state.js", "planning-service.js", "handoff-service.js", "legacy-generation-adapter.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: path.join(root, file) });
+}
 const code = fs.readFileSync(path.join(root, "pipeline.js"), "utf8");
-vm.runInNewContext(code, sandbox);
-vm.runInNewContext(fs.readFileSync(path.join(root, "craft.js"), "utf8"), sandbox);
+vm.runInNewContext(code, sandbox, { filename: path.join(root, "pipeline.js") });
+vm.runInNewContext(fs.readFileSync(path.join(root, "craft.js"), "utf8"), sandbox, {
+  filename: path.join(root, "craft.js"),
+});
 const Pipe = sandbox.window.NOVEL_PIPELINE;
 
 // mergeTasksPreservingProgress
@@ -102,6 +107,63 @@ const overlay = Pipe.mergeTasksPreservingProgress(
   [{ id: "t3", order: 3, status: "pending", chapter_title: "C" }],
   []
 );
+const freshReplace = Pipe.mergeTasksPreservingProgress(
+  [
+    { id: "t001", order: 1, status: "pending", chapter_title: "旧诊所" },
+    { id: "t002", order: 2, status: "pending", chapter_title: "旧章二" },
+  ],
+  [
+    { id: "t001", order: 1, status: "pending", chapter_title: "新开局" },
+    { id: "t010", order: 10, status: "pending", chapter_title: "新十章" },
+  ],
+  []
+);
+assert.equal(freshReplace.length, 2, "没有进度时重跑策划必须整板换成新任务");
+assert.equal(freshReplace[0].chapter_title, "新开局");
+assert.ok(freshReplace.find((t) => t.id === "t010"));
+
+const nameLocks = Pipe.collectAuthorNameLocks({
+  ideaInput: "女主沈照雪，特勤平等合作。男主陆沉装弱打脸。",
+  authorNote: "身世中后揭",
+});
+assert.ok(nameLocks.some((x) => x.role === "heroine" && x.name === "沈照雪"));
+assert.ok(nameLocks.some((x) => x.role === "protagonist" && x.name === "陆沉"));
+assert.ok(!nameLocks.some((x) => x.name.includes("特勤")));
+
+const renamed = {
+  ideaInput: "女主沈照雪，男主陆沉",
+  graph: {
+    nodes: [
+      { id: "n1", role: "protagonist", label: "林玄", aliases: [] },
+      { id: "n2", role: "heroine", label: "苏清月", aliases: [] },
+    ],
+    edges: [{ source: "n1", target: "n2", note: "林玄与苏清月合作" }],
+  },
+  cast_summary: "林玄与苏清月合作",
+};
+Pipe.applyAuthorNamesToGraph(renamed);
+assert.equal(renamed.graph.nodes.find((n) => n.role === "heroine").label, "沈照雪");
+assert.equal(renamed.graph.nodes.find((n) => n.role === "protagonist").label, "陆沉");
+assert.ok(renamed.cast_summary.includes("沈照雪"));
+assert.ok(!renamed.cast_summary.includes("苏清月"));
+
+const malformedAliases = {
+  ideaInput: "女主沈照雪",
+  graph: { nodes: [{ id: "h", role: "heroine", label: "旧名", aliases: "别名" }], edges: [] },
+};
+Pipe.applyAuthorNamesToGraph(malformedAliases);
+assert.equal(malformedAliases.graph.nodes[0].label, "沈照雪");
+assert.deepEqual(malformedAliases.graph.nodes[0].aliases, ["别名", "旧名"]);
+
+const missingAuthorNodes = { ideaInput: "女主沈照雪，男主陆沉", graph: { nodes: [], edges: [] } };
+Pipe.applyAuthorNamesToGraph(missingAuthorNodes);
+assert.equal(missingAuthorNodes.graph.nodes.length, 2, "缺少作者点名角色时应补齐最小角色节点");
+assert.ok(missingAuthorNodes.graph.nodes.some((node) => node.label === "沈照雪"));
+assert.ok(missingAuthorNodes.graph.nodes.some((node) => node.label === "陆沉"));
+const explicitFieldNames = { authorCastNote: "女主叫阿雪", graph: { nodes: [{ role: "heroine", label: "旧名" }], edges: [] } };
+Pipe.applyAuthorNamesToGraph(explicitFieldNames);
+assert.equal(explicitFieldNames.graph.nodes[0].label, "阿雪", "显式人物约束字段中的姓名也必须生效");
+
 assert.equal(overlay.length, 3, "重跑策划必须追加保留不在新稿里的已有进度");
 assert.ok(overlay.find((t) => t.id === "t1"));
 assert.ok(overlay.find((t) => t.id === "t2"));
@@ -358,5 +420,154 @@ await Pipe.digestChapter(digestProject, { baseUrl: "", apiKey: "", model: "" }, 
 assert.ok((digestProject._mergedFacts || []).some((fact) => fact.key === "林清.假名"));
 assert.ok(!(digestProject._mergedFacts || []).some((fact) => fact.key === "谢宴"));
 assert.ok(!(digestProject._mergedFacts || []).some((fact) => String(fact.value || "").includes("卧底")));
+
+// 作者姓名锁解析：覆盖角色后缀、显式命名词、复姓、标点和常见性格描述误报。
+for (const [input, expected] of [
+  ["女主角叫沈照雪，男主角名为陆沉", ["沈照雪", "陆沉"]],
+  ["女主的名字是欧阳娜娜；男主姓名为司马懿", ["欧阳娜娜", "司马懿"]],
+  ["女主名字叫做沈照雪，男主身份为陆沉", ["沈照雪", "陆沉"]],
+  ["女主就是阿雪，男主叫小七", ["阿雪", "小七"]],
+  ["女主: 沈照雪; 男主: 陆沉", ["沈照雪", "陆沉"]],
+  ["女主沈照雪的能力很强，男主陆沉是医生", ["沈照雪", "陆沉"]],
+]) {
+  assert.deepEqual(
+    Pipe.collectAuthorNameLocks({ ideaInput: input }).map((item) => item.name),
+    expected,
+    `姓名锁解析失败：${input}`
+  );
+}
+for (const input of [
+  "女主能听见死者遗言",
+  "女主擅长医术，男主高冷",
+  "女主是个普通人，男主装弱打脸",
+  "女主与男主合作",
+]) {
+  assert.equal(Pipe.collectAuthorNameLocks({ ideaInput: input }).length, 0, `不应把描述误判成人名：${input}`);
+}
+assert.equal(Pipe.normalizeTargetChapters(1), 8);
+assert.equal(Pipe.normalizeTargetChapters(401), 400);
+assert.equal(Pipe.normalizeTargetChapters("bad"), 20);
+
+// 显式 authorCastNote/authorSpineLock 不能被自动生成的姓名约束静默覆盖，且原始说明只注入一次。
+const promptCalls = {};
+sandbox.window.NOVEL_PROMPTS.stageWorld.user = (bible) => {
+  promptCalls.world = bible;
+  return "world";
+};
+sandbox.window.NOVEL_PROMPTS.stageCast.user = (bible) => {
+  promptCalls.cast = bible;
+  return "cast";
+};
+sandbox.window.NOVEL_PROMPTS.stageSpine.user = (bible) => {
+  promptCalls.spine = bible;
+  return "spine";
+};
+sandbox.window.NOVEL_API.chatJson = async () => ({ nodes: [], edges: [], cast_summary: "", logline: "主线", tasks: [] });
+const explicitConstraints = {
+  ideaInput: "女主沈照雪，男主陆沉",
+  authorNote: "原始说明",
+  authorCastNote: "CAST LOCK",
+  authorSpineLock: "SPINE LOCK",
+  locks: {},
+  targetChapters: 20,
+};
+await Pipe.runWorld(explicitConstraints, {}, {});
+await Pipe.runCast(explicitConstraints, {}, {});
+await Pipe.runSpine(explicitConstraints, {}, {});
+assert.ok(promptCalls.cast.authorCastNote.includes("CAST LOCK"));
+assert.ok(promptCalls.spine.authorSpineLock.includes("SPINE LOCK"));
+assert.equal((promptCalls.world.authorNote.match(/原始说明/g) || []).length, 1);
+
+// 锁定 cast/spine 时不调用模型，也必须把旧图谱/任务文本中的男女主归一化到作者姓名。
+const lockedPlan = {
+  ideaInput: "女主沈照雪，男主陆沉",
+  locks: { logline: "林玄要破局", lockedFields: ["cast", "spine", "logline"] },
+  graph: {
+    nodes: [
+      { id: "p", role: "protagonist", label: "林玄", aliases: [] },
+      { id: "h", role: "heroine", label: "苏清月", aliases: [] },
+    ],
+    edges: [{ source: "p", target: "h", note: "林玄保护苏清月" }],
+  },
+  cast_summary: "林玄保护苏清月",
+  spine: { logline: "林玄与苏清月", spine: [], volumes: [], foreshadow: [] },
+  tasks: [{ id: "t1", order: 1, status: "pending", chapter_title: "林玄出场", goal: "苏清月" }],
+  chapters: [{ id: "ch1", title: "林玄旧章", body: "正文保留林玄原文", order: 1 }],
+};
+let lockedCalls = 0;
+sandbox.window.NOVEL_API.chatJson = async () => {
+  lockedCalls += 1;
+  return {};
+};
+await Pipe.runFullPlan(lockedPlan, {}, {});
+assert.equal(lockedCalls, 2, "cast/spine 锁定时不应重复调用模型");
+assert.equal(lockedPlan.graph.nodes.find((n) => n.role === "protagonist").label, "陆沉");
+assert.equal(lockedPlan.graph.nodes.find((n) => n.role === "heroine").label, "沈照雪");
+
+// 严格质量闸门不能被旧的“执行章后交接”入口绕过。
+const blockedHandoffProject = {
+  chapters: [],
+  tasks: [],
+  locks: {},
+  graph: { nodes: [], edges: [] },
+  memoryRoll: [],
+  pipelineLog: [],
+  detailCanon: { facts: [] },
+};
+const blockedHandoffChapter = {
+  id: "blocked-ch",
+  taskId: "blocked-task",
+  title: "阻断章",
+  order: 1,
+  body: "尚未通过质量闸门的正文",
+  handoffStatus: "stale",
+  production: { status: "needs_revision", stage: "quality-blocked" },
+};
+blockedHandoffProject.chapters.push(blockedHandoffChapter);
+await assert.rejects(
+  () => Pipe.handoffChapter(blockedHandoffProject, { productionEngineEnabled: true, productionQualityPolicy: "strict" }, blockedHandoffChapter, { id: "blocked-task", status: "written" }),
+  (error) => error.code === "QUALITY_GATE_BLOCKED",
+  "blocked production chapter must not enter digest/graph handoff"
+);
+assert.equal(blockedHandoffChapter.handoffStatus, "stale");
+
+// 即使新写入路径忘了主动作废报告，最终交接也必须以 bodySig 做兜底核验。
+const staleSignatureTask = { id: "stale-signature-task", status: "done" };
+const staleSignatureChapter = {
+  id: "stale-signature-ch",
+  taskId: staleSignatureTask.id,
+  body: "外部改过的新正文",
+  handoffStatus: "done",
+  production: {
+    status: "done",
+    stage: "done",
+    bodyAuthoritative: true,
+    bodySig: sandbox.window.NOVEL_PRODUCTION_STATE.bodySignature("验收时的旧正文"),
+  },
+};
+await assert.rejects(
+  () =>
+    Pipe.handoffChapter(
+      blockedHandoffProject,
+      { productionEngineEnabled: true, productionQualityPolicy: "strict" },
+      staleSignatureChapter,
+      staleSignatureTask
+    ),
+  (error) => error.code === "QUALITY_GATE_BLOCKED"
+);
+assert.equal(staleSignatureChapter.production.status, "needs_revision");
+assert.equal(staleSignatureTask.status, "needs_revision");
+assert.equal(staleSignatureTask.lastErrorStage, "quality-gate");
+assert.ok(lockedPlan.cast_summary.includes("陆沉"));
+assert.ok(lockedPlan.tasks[0].goal.includes("沈照雪"));
+assert.equal(lockedPlan.chapters[0].body, "正文保留林玄原文", "姓名归一化不能静默改写已写正文");
+
+// 旧项目缺少 locks/数组字段时，单独运行 spine 也应自愈；目标章数必须落在 UI 合同范围内。
+sandbox.window.NOVEL_API.chatJson = async () => ({ logline: "新主线", tasks: [] });
+const legacyPlan = { pitch: "p", graph: {}, world: {}, targetChapters: 2 };
+await Pipe.runSpine(legacyPlan, {}, {});
+assert.equal(legacyPlan.targetChapters, 8);
+assert.ok(legacyPlan.locks && Array.isArray(legacyPlan.locks.lockedFields));
+assert.ok(Array.isArray(legacyPlan.tasks) && Array.isArray(legacyPlan.chapters));
 
 console.log("test_pipeline_logic: OK");

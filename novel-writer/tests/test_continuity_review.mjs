@@ -26,8 +26,11 @@ const sandbox = {
   console,
 };
 
-for (const file of ["prompts.js", "craft.js", "context.js"]) {
-  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox);
+for (const file of ["prompts.js", "craft.js", "chapter-state.js", "production-state.js", "memory-reducers.js", "context-budget.js", "context-evidence.js", "context.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: path.join(root, file) });
+}
+for (const file of ["planning-service.js", "handoff-service.js", "legacy-generation-adapter.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: path.join(root, file) });
 }
 
 sandbox.window.NOVEL_API = {
@@ -131,6 +134,8 @@ assert.equal(repairCalls, 1, "only one repair call");
 assert.match(project.chapters[1].body, /依旧停留在五级/);
 assert.equal(project.chapters[1].revisionHistory.length, 1);
 assert.match(project.chapters[1].revisionHistory[0].body, /十五级/);
+assert.equal(project.chapters[1].handoffStatus, "stale");
+assert.equal(task.status, "written", "legacy continuity repair must use the shared chapter transition");
 assert.equal(project.continuityIssues[0].status, "handled", "repaired issue is closed after passing recheck");
 assert.equal(project.continuityIssues[0].expected, "林玄.等级=五级", "structured checker keeps Canon evidence");
 

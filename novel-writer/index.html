@@ -169,12 +169,13 @@
 
           <label class="field">
             <span>你的选题意向（题材 / 受众 / 必有元素）</span>
-            <textarea id="ideaInput" class="input area" rows="3" placeholder="例：都市高武，女主能听见死者遗言，先抑后扬，要有公司权谋和灵异双线，禁止无脑无剧情的打卡升级。"></textarea>
+            <textarea id="ideaInput" class="input area" rows="3" placeholder="例：都市高武，女主沈照雪能听见死者遗言，男主陆沉装弱打脸。先抑后扬，禁止无脑升级。"></textarea>
+            <p class="hint" id="authorNameLockHint"></p>
           </label>
           <div class="row2">
             <label class="field">
               <span>目标章数（先出详细任务）</span>
-              <input id="targetChapters" class="input" type="number" min="8" max="200" value="20" />
+              <input id="targetChapters" class="input" type="number" min="8" max="400" value="20" />
             </label>
             <label class="field">
               <span>作者补充（可选）</span>
@@ -469,6 +470,15 @@
                 <ol id="beatSceneList"></ol>
                 <button type="button" class="btn ghost xs" id="btnRefreshBeat">重出细纲</button>
               </div>
+              <div class="production-quality" id="productionQuality" hidden>
+                <div class="inspector-section-head">
+                  <h3>叙事质量闸门</h3>
+                  <span id="productionQualityStatus" class="status-count">待评估</span>
+                </div>
+                <p class="muted xs" id="productionQualityMeta">分场完成后显示因果、人物主动性和钩子验收。</p>
+                <div class="quality-score-grid" id="productionQualityScores"></div>
+                <ul class="quality-issues" id="productionQualityIssues"></ul>
+              </div>
               <button type="button" class="btn block legacy-action" id="btnWriteTask" hidden>按任务直接执行</button>
             </section>
             <section class="inspector-panel" id="inspector-continuity" role="tabpanel" aria-labelledby="tab-inspector-continuity" hidden>
@@ -706,6 +716,8 @@
             <label class="field"><span>上章文末衔接字数</span><input id="cfgPrevTail" class="input mono" type="number" title="写新章时附带上一章文末，保证连贯" /></label>
             <label class="field"><span>滚动摘要条数</span><input id="cfgMemDepth" class="input mono" type="number" /></label>
             <label class="field setting-toggle"><span><strong>Harness 写章流水线</strong><small>使用检索、写作、交接和重建索引的完整闭环。</small></span><input id="cfgHarness" type="checkbox" checked /></label>
+            <label class="field setting-toggle"><span><strong>契约化整章生产引擎（候选）</strong><small>先编译场面契约，再一次起草整章、批评和验收；真实 A/B 通过前不作为新安装默认值。</small></span><input id="cfgProduction" type="checkbox" /></label>
+            <label class="field"><span>质量闸门</span><select id="cfgQualityGate" class="select" aria-describedby="qualityGateScope"><option value="strict">严格：不合格就停在待修订</option><option value="warn">宽松：保留提醒并继续交接</option></select><small id="qualityGateScope">仅在启用上方候选生产引擎后生效。</small></label>
             <label class="field setting-toggle"><span><strong>生成后自动交接</strong><small>正文完成后自动更新摘要、人物关系和故事记忆。</small></span><input id="cfgManualHandoff" type="checkbox" checked /></label>
           </section>
 
@@ -717,7 +729,7 @@
             <label class="field setting-toggle"><span><strong>允许精确局部修订</strong><small>只修复唯一命中的问题片段，并保留原文快照。</small></span><input id="cfgContinuityRepair" type="checkbox" checked /></label>
             <label class="field setting-toggle"><span><strong>写前本章细纲</strong><small>先规划 2–5 个场面再写，避免连章空转和撞开场。</small></span><input id="cfgChapterBeat" type="checkbox" checked /></label>
             <label class="field setting-toggle"><span><strong>写后套话检查</strong><small>开场重复、禁词和套话记入连续性风险。</small></span><input id="cfgProseLint" type="checkbox" checked /></label>
-            <label class="field setting-toggle danger-setting"><span><strong>严格审查</strong><small>存在 blocker 时停止交接，等待作者处理。</small></span><input id="cfgContinuityStrict" type="checkbox" /></label>
+            <label class="field setting-toggle danger-setting"><span><strong>严格审查</strong><small>发现阻断问题、审查失败或未完成时停止交接，等待处理。</small></span><input id="cfgContinuityStrict" type="checkbox" /></label>
           </section>
 
           <section class="settings-section" id="settings-panel-retrieval" data-settings-panel="retrieval" role="tabpanel" aria-labelledby="settings-tab-retrieval" hidden>
@@ -740,6 +752,12 @@
             <label class="field setting-toggle"><span><strong>向量重排</strong><small>需要反代提供 embeddings 接口。</small></span><input id="cfgRagEmbed" type="checkbox" /></label>
             <label class="field"><span>RAG Top-K</span><input id="cfgRagTopK" class="input mono" type="number" /></label>
             <p class="hint muted">完整链路：Retrieve → Write → Review → Handoff → Reindex。预算建议不低于 14,000 字符。</p>
+            <div class="settings-subsection">
+              <h4>本地诊断报告</h4>
+              <p class="settings-description">导出阶段耗时、错误分类、正文签名与证据清单身份。报告不含正文、提示词、API Key、服务地址或原始错误消息。</p>
+              <button type="button" class="btn ghost" id="btnExportDiagnostics">导出脱敏诊断 JSON</button>
+              <p class="hint muted" id="cfgDiagnosticsMeta">最多保留当前作品最近 240 条、本次会话最近 500 条事件。</p>
+            </div>
           </section>
         </div>
       </div>
@@ -820,10 +838,22 @@
     </div>
   </div>
 
+  <script src="quality-release-policy.js"></script>
+  <script src="quality-release.js"></script>
+  <script src="runtime-observability.js"></script>
   <script src="config.js"></script>
   <script src="chapter-format.js"></script>
   <script src="prompts.js"></script>
   <script src="craft.js"></script>
+  <script src="chapter-state.js"></script>
+  <script src="project-migrations.js"></script>
+  <script src="production-state.js"></script>
+  <script src="conflict-use-cases.js"></script>
+  <script src="persistence-use-cases.js"></script>
+  <script src="write-use-cases.js"></script>
+  <script src="memory-reducers.js"></script>
+  <script src="context-budget.js"></script>
+  <script src="context-evidence.js"></script>
   <script src="context.js"></script>
   <script src="rag.js"></script>
   <script src="store.js"></script>
@@ -833,8 +863,14 @@
   <script src="library.js"></script>
   <script src="workspace.js"></script>
   <script src="api.js"></script>
+  <script src="planning-service.js"></script>
+  <script src="handoff-service.js"></script>
+  <script src="legacy-generation-adapter.js"></script>
   <script src="pipeline.js"></script>
   <script src="harness.js"></script>
+  <script src="chapter-drafting-service.js"></script>
+  <script src="production-quality.js"></script>
+  <script src="production-engine.js"></script>
   <script src="chapter-split.js"></script>
   <script src="narrative-model.js"></script>
   <script src="graph-view.js"></script>
@@ -845,6 +881,8 @@
   <script src="analysis-runner.js"></script>
   <script src="analyze-ui.js"></script>
   <script src="vault-ui.js"></script>
+  <script src="runtime-diagnostics-ui.js"></script>
+  <script src="composition-contract.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

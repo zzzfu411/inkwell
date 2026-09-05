@@ -1,0 +1,65 @@
+name: Build immutable release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inkwell-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out frontend and backend from one immutable commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: mogao-tauri/package-lock.json
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Set up stable Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Install pinned Node toolchain
+        working-directory: mogao-tauri
+        run: npm ci
+      - name: Build and verify the immutable release
+        shell: pwsh
+        working-directory: mogao-tauri
+        run: ./scripts/build-release.ps1
+      - name: Upload immutable release
+        uses: actions/upload-artifact@v4
+        with:
+          name: Inkwell-${{ github.ref_name }}-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: mogao-tauri/release/**
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: mogao-tauri/output/**

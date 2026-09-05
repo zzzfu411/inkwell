@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = { window: {} };
-vm.runInNewContext(fs.readFileSync(path.join(root, "chapter-format.js"), "utf8"), sandbox);
+vm.runInNewContext(fs.readFileSync(path.join(root, "chapter-format.js"), "utf8"), sandbox, {
+  filename: path.join(root, "chapter-format.js"),
+});
 const F = sandbox.window.NOVEL_CHAPTER_FORMAT;
 
 const raw = [

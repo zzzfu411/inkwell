@@ -1,0 +1,23 @@
+{
+  "id": "legacy-book",
+  "slug": "legacy-book",
+  "title": "旧格式作品",
+  "tasks": [
+    { "id": "task-1", "status": "done", "order": 1 }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-1",
+      "taskId": "task-1",
+      "order": 1,
+      "body": "旧格式但已经完成的正文",
+      "handoffStatus": "done",
+      "handoffAt": 88,
+      "production": {
+        "status": "done",
+        "stage": "done",
+        "scenes": null
+      }
+    }
+  ]
+}

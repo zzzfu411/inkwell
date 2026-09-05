@@ -1,0 +1,23 @@
+{
+  "id": "recovery-book",
+  "slug": "recovery-book",
+  "title": "恢复副本",
+  "_dirty": true,
+  "tasks": [
+    { "id": "task-1", "status": "done", "order": 1 }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-1",
+      "taskId": "task-1",
+      "order": 1,
+      "body": "恢复缓存中的未落盘正文。",
+      "handoffStatus": "done",
+      "production": {
+        "status": "needs_revision",
+        "stage": "quality-blocked",
+        "scenes": []
+      }
+    }
+  ]
+}

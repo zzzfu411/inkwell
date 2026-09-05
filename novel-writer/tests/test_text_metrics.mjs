@@ -16,7 +16,7 @@ assert.doesNotMatch(source, /\.match\(/, "zero-alloc rewrite must not allocate m
 assert.doesNotMatch(source, /document\.|getElementById|innerHTML/, "text-metrics.js must stay DOM-free");
 
 const sandbox = { window: {} };
-vm.runInNewContext(source, sandbox);
+vm.runInNewContext(source, sandbox, { filename: path.join(root, "text-metrics.js") });
 const countWords = sandbox.window.NOVEL_TEXT_METRICS.countWords;
 assert.equal(typeof countWords, "function");
 

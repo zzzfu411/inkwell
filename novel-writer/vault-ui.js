@@ -87,7 +87,7 @@ window.NOVEL_VAULT_UI = (() => {
     document.body.appendChild(ta);
     ta.select();
     ta.setSelectionRange(0, t.length);
-    let ok = false;
+    let ok;
     try {
       ok = document.execCommand("copy");
     } finally {
@@ -624,7 +624,66 @@ window.NOVEL_VAULT_UI = (() => {
     wireDom();
   }
 
+  function compareStorageVersions({ title, description, local, disk }) {
+    return new Promise((resolve) => {
+      const priorFocus = document.activeElement;
+      const dialog = document.createElement("dialog");
+      dialog.className = "storage-conflict-dialog";
+      const heading = document.createElement("h2");
+      heading.id = "storageConflictTitle";
+      heading.textContent = title;
+      dialog.setAttribute("aria-labelledby", heading.id);
+      const explanation = document.createElement("p");
+      explanation.textContent = description;
+      const versions = document.createElement("div");
+      versions.className = "storage-conflict-versions";
+      for (const [label, content] of [["当前草稿", local], ["磁盘版本", disk]]) {
+        const pane = document.createElement("section");
+        const caption = document.createElement("h3");
+        caption.textContent = label;
+        const text = document.createElement("pre");
+        text.tabIndex = 0;
+        text.textContent = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+        pane.append(caption, text);
+        versions.append(pane);
+      }
+      const actions = document.createElement("div");
+      actions.className = "storage-conflict-actions";
+      for (const [choice, label] of [["cancel", "暂不处理"], ["disk", "采用磁盘版本"], ["local", "用当前草稿覆盖"]]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "btn";
+        button.textContent = label;
+        button.addEventListener("click", () => dialog.close(choice));
+        actions.append(button);
+      }
+      dialog.append(heading, explanation, versions, actions);
+      dialog.addEventListener("close", () => {
+        const choice = dialog.returnValue || "cancel";
+        dialog.remove();
+        priorFocus?.focus?.();
+        resolve(choice);
+      }, { once: true });
+      document.body.append(dialog);
+      dialog.showModal();
+      actions.firstElementChild.focus();
+    });
+  }
+
+  function resolveBookConflict(local, disk) {
+    const metadata = (project) => Object.fromEntries(Object.entries(project).filter(
+      ([key]) => !key.startsWith("_") && !["chapters", "updatedAt", "activeChapterId"].includes(key)
+    ));
+    return compareStorageVersions({
+      title: "书籍设定存在保存冲突",
+      description: "另一处修改了作品设定。请比较后选择要保存的设定；当前章节草稿会保留，章节冲突另行处理。",
+      local: metadata(local), disk: metadata(disk),
+    });
+  }
+
   return {
+    compareStorageVersions,
+    resolveBookConflict,
     init,
     isVaultOpOk,
     applyVaultOpResult,

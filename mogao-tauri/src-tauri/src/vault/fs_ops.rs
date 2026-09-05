@@ -1,4 +1,5 @@
 //! 书内文件系统操作与镜像回写
+use super::concurrency::{check_revision, content_revision};
 use super::tasks::merge_tasks_preserving_progress;
 use super::util::{
     default_book, now_ms, parse_chapter_md, parse_pitch_md, read_json, system_time_ms, write_json,
@@ -83,6 +84,7 @@ impl Vault {
     }
 
     pub fn read_file(&self, slug: &str, rel: &str) -> Result<Value> {
+        let _g = IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let target = self.safe_rel(slug, rel)?;
         if !target.is_file() {
             bail!("file not found");
@@ -99,14 +101,42 @@ impl Vault {
             "name": target.file_name().and_then(|s| s.to_str()).unwrap_or(""),
             "ext": ext,
             "content": text,
+            "revision": content_revision(&text),
             "mtime": meta.modified().ok().and_then(system_time_ms).unwrap_or(0),
             "size": meta.len(),
         }))
     }
 
     pub fn write_file(&self, slug: &str, rel: &str, content: &str) -> Result<Value> {
+        self.write_file_impl(slug, rel, content, None, false)
+    }
+
+    pub fn write_file_checked(
+        &self,
+        slug: &str,
+        rel: &str,
+        content: &str,
+        expected: Option<&str>,
+    ) -> Result<Value> {
+        self.write_file_impl(slug, rel, content, expected, true)
+    }
+
+    fn write_file_impl(
+        &self,
+        slug: &str,
+        rel: &str,
+        content: &str,
+        expected: Option<&str>,
+        checked: bool,
+    ) -> Result<Value> {
         let _g = IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let target = self.safe_rel(slug, rel)?;
+        let actual = if target.is_file() {
+            content_revision(&fs::read_to_string(&target)?)
+        } else {
+            "missing".into()
+        };
+        check_revision(expected, &actual, checked, "FILE")?;
         let ext = target
             .extension()
             .map(|x| format!(".{}", x.to_string_lossy().to_lowercase()))
@@ -132,6 +162,7 @@ impl Vault {
             "path": rel_n,
             "mtime": meta.modified().ok().and_then(system_time_ms).unwrap_or(0),
             "size": meta.len(),
+            "revision": content_revision(content),
         }))
     }
 

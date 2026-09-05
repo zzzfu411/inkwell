@@ -31,6 +31,7 @@
       beforeRevisionHistory: Array.isArray(chapter?.revisionHistory) ? clone(chapter.revisionHistory) : null,
       taskId: linkedTask?.id || "",
       beforeTaskStatus: linkedTask?.status,
+      beforeProjection: window.NOVEL_CHAPTER_STATE?.captureProjection?.(chapter, linkedTask),
     };
   }
 
@@ -82,11 +83,19 @@
   function restore(state, chapter, task) {
     chapter.body = state.beforeBody;
     chapter.updatedAt = Date.now();
-    chapter.handoffStatus = state.beforeHandoffStatus;
-    chapter.handoffError = state.beforeHandoffError;
     if (state.beforeRevisionHistory) chapter.revisionHistory = state.beforeRevisionHistory;
     else delete chapter.revisionHistory;
-    if (task && state.beforeTaskStatus !== undefined) task.status = state.beforeTaskStatus;
+    const projection =
+      state.beforeProjection ||
+      {
+        hasProduction: false,
+        hasQualityReview: false,
+        handoffStatus: state.beforeHandoffStatus,
+        handoffError: state.beforeHandoffError,
+        taskStatus: state.beforeTaskStatus,
+      };
+    const transition = window.NOVEL_CHAPTER_STATE?.restoreProjection?.(chapter, task, projection);
+    if (!transition) throw new Error("NOVEL_CHAPTER_STATE 未在 composer-review.js 前加载");
     return chapter;
   }
 

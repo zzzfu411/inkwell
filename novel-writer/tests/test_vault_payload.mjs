@@ -5,6 +5,7 @@ import { fileURLToPath } from "url";
 import vm from "vm";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const reconciledLoads = [];
 const sandbox = {
   window: {
     NOVEL_RAG: {
@@ -14,6 +15,9 @@ const sandbox = {
         _sig: index._sig,
         docs: index.docs,
       }),
+    },
+    NOVEL_PRODUCTION_STATE: {
+      reconcileProject: (project, options) => reconciledLoads.push({ project, options }),
     },
   },
   URLSearchParams,
@@ -33,8 +37,17 @@ const sandbox = {
   console,
 };
 
+for (const file of ["chapter-state.js", "project-migrations.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: file });
+}
 vm.runInNewContext(fs.readFileSync(path.join(root, "vault.js"), "utf8"), sandbox);
 const Vault = sandbox.window.NOVEL_VAULT;
+const loadedBook = { slug: "loaded", chapters: [] };
+assert.equal(Vault.reconcileLoadedBook(loadedBook), loadedBook);
+assert.equal(loadedBook.schemaVersion, 1, "Vault hydration must migrate legacy projects before use");
+assert.equal(reconciledLoads.length, 1);
+assert.equal(reconciledLoads[0].project, loadedBook);
+assert.match(reconciledLoads[0].options.reason, /磁盘正文/);
 const payload = Vault.prepareProjectForSave({
   slug: "book",
   chapters: [{ id: "c1", body: "body" }],
@@ -52,12 +65,26 @@ const payload = Vault.prepareProjectForSave({
 });
 
 assert.equal(payload.slug, "book");
+assert.equal(payload.schemaVersion, 1);
 assert.equal(payload.chapters[0].body, "body");
 assert.equal(payload.ragIndex._sig, "sig");
 assert.equal(payload.ragIndex.inverted, undefined);
 assert.equal(payload._lastRag, undefined);
 assert.equal(payload._lastContextManifest, undefined);
 assert.equal(payload._saveWarnings, undefined);
+
+const futureBook = { schemaVersion: 2, slug: "future", chapters: [], futureOnly: { keep: true } };
+const futureBefore = JSON.stringify(futureBook);
+assert.throws(
+  () => Vault.prepareProjectForSave(futureBook),
+  (error) => error.code === "SCHEMA_VERSION_UNSUPPORTED"
+);
+assert.equal(JSON.stringify(futureBook), futureBefore, "future schema must never be rewritten by save preparation");
+await assert.rejects(
+  () => Vault.migrate([futureBook]),
+  (error) => error.code === "SCHEMA_VERSION_UNSUPPORTED",
+  "bulk migration must use the same schema write barrier"
+);
 
 const localAfterSave = {
   chapters: [{ id: "c1", title: "第一章", order: 1, body: "内存旧稿", _file: "章节/001-第一章.md" }],

@@ -1,10 +1,10 @@
 #![recursion_limit = "256"]
 
 mod embed_ui;
-mod http_api;
+pub mod http_api;
 mod preview;
 mod settings;
-mod vault;
+pub mod vault;
 
 use http_api::SharedVault;
 use serde_json::Value;

@@ -45,6 +45,63 @@ window.NOVEL_LIBRARY = (() => {
     });
   }
 
+  function buildSidebarModel(libraryBooks, projects, query, vaultOnline) {
+    const allBooks = (
+      Array.isArray(libraryBooks) && libraryBooks.length
+        ? libraryBooks.slice()
+        : (projects || []).map((project) => ({
+            slug: project.slug,
+            title: project.title,
+            chapters: (project.chapters || []).length,
+            stage: project.stage,
+          }))
+    ).filter((book) => String(book?.slug || "").trim());
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    const books = normalizedQuery
+      ? allBooks.filter((book) =>
+          [book.title, book.slug].some((value) =>
+            String(value || "").toLowerCase().includes(normalizedQuery)
+          )
+        )
+      : allBooks.slice();
+    const filteredEmpty = Boolean(normalizedQuery && allBooks.length && !books.length);
+    return {
+      books,
+      query: normalizedQuery,
+      clearList: !vaultOnline && !books.length,
+      empty: {
+        hidden: books.length > 0,
+        filtered: filteredEmpty,
+        kicker: filteredEmpty ? "没有匹配的作品" : "还没有可写的作品",
+        title: filteredEmpty ? "换一个关键词，或清除当前筛选。" : "建立一本新书，或连接已有书库。",
+        hint: filteredEmpty
+          ? `未找到“${normalizedQuery}”`
+          : vaultOnline
+            ? "新书会安全写入当前本地书库。"
+            : "本地服务未连接。浏览器缓存只能临时保留本机草稿，文件、快照、导入导出和跨书搜索暂不可用。",
+      },
+    };
+  }
+
+  function renderSidebarState(model) {
+    const empty = document.getElementById("libraryEmptyState");
+    if (empty) {
+      empty.hidden = model.empty.hidden;
+      const kicker = document.getElementById("libraryEmptyKicker");
+      const title = document.getElementById("libraryEmptyTitle");
+      const hint = document.getElementById("libraryEmptyHint");
+      if (kicker) kicker.textContent = model.empty.kicker;
+      if (title) title.textContent = model.empty.title;
+      if (hint) hint.textContent = model.empty.hint;
+      empty.querySelectorAll("[data-library-action]").forEach((button) => {
+        button.hidden = model.empty.filtered
+          ? button.dataset.libraryAction !== "clear"
+          : button.dataset.libraryAction === "clear";
+      });
+    }
+    if (model.clearList) document.getElementById("libraryList")?.replaceChildren();
+  }
+
   function escapeHtml(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -61,5 +118,5 @@ window.NOVEL_LIBRARY = (() => {
       : fetch(`/api/books/${encodeURIComponent(slug)}/meta`).then((r) => r.json());
   }
 
-  return { renderSidebar, fetchMeta, escapeHtml };
+  return { renderSidebar, buildSidebarModel, renderSidebarState, fetchMeta, escapeHtml };
 })();

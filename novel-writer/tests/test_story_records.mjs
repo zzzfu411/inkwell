@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = { window: {}, console };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, "story-records.js"), "utf8"), sandbox);
+vm.runInContext(fs.readFileSync(path.join(root, "story-records.js"), "utf8"), sandbox, {
+  filename: path.join(root, "story-records.js"),
+});
 const R = sandbox.window.NOVEL_STORY_RECORDS;
 
 assert.ok(R, "NOVEL_STORY_RECORDS must load");
@@ -141,5 +143,30 @@ assert.equal(many.visible.length, R.RENDER_LIMIT);
 assert.equal(many.matched, 130);
 assert.equal(many.truncated, 30);
 assert.equal(many.stats, "130 / 130 条");
+
+const canonHtml = R.renderCanonHtml(canon);
+assert.match(canonHtml, /story-record/);
+assert.match(canonHtml, /断霜/);
+const safeLoopHtml = R.renderLoopHtml(
+  R.buildLoopRecords({ plotLoops: [{ summary: "<script>坏</script>", status: "open" }] })
+);
+assert.doesNotMatch(safeLoopHtml, /<script>/);
+assert.match(safeLoopHtml, /&lt;script&gt;/);
+const continuityHtml = R.renderContinuityHtml(issues);
+assert.match(continuityHtml, /severity-blocker/);
+assert.match(continuityHtml, /data-issue-index/);
+
+const summary = R.buildStorySummary({
+  spine: { spine: [{ act: 1, name: "启程", goal: "离城" }] },
+  storyline: { positionSummary: "城门", chapterLogs: [{ order: 1, summary: "出发" }] },
+  storyState: { lastChapter: "第一章", openLoops: ["追兵"] },
+  memoryRoll: [{ chapter: "第一章", happened: ["越墙"] }],
+  entityStates: { hero: { entity: "阿青", location: "城外" } },
+  timelineEvents: [{ order: 1, event: "夜逃" }],
+});
+assert.match(summary.spineText, /Act1 启程/);
+assert.match(summary.storylineText, /轨迹/);
+assert.match(summary.memoryText, /追兵/);
+assert.match(summary.entityStateText, /阿青/);
 
 console.log("test_story_records: OK");

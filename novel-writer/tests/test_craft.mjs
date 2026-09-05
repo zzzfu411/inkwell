@@ -6,7 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = { window: {}, console };
-vm.runInNewContext(fs.readFileSync(path.join(root, "craft.js"), "utf8"), sandbox);
+vm.runInNewContext(fs.readFileSync(path.join(root, "craft.js"), "utf8"), sandbox, {
+  filename: path.join(root, "craft.js"),
+});
 const Craft = sandbox.window.NOVEL_CRAFT;
 
 assert.equal(Craft.detectOpeningKind("夜色沉沉，大雾漫过栈道。"), "weather");
@@ -129,5 +131,12 @@ const scored = Craft.scoreChapterCraft(
 );
 assert.ok(scored.beatCoverage.rate > 0);
 assert.ok(scored.dialogueRate > 0);
+
+const styleProfile = Craft.deriveStyleProfile([
+  { order: 1, body: "「站住。」林清抬手。\n冷风刮过掌心。" },
+  { order: 2, body: "苏清月没有回头。\n铁锈味贴在舌根。" },
+]);
+assert.equal(styleProfile.sampleChapters, 2);
+assert.ok(styleProfile.guidance.some((line) => line.includes("对白")));
 
 console.log("test_craft: OK");

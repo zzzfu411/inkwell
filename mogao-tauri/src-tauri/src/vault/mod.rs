@@ -1,6 +1,7 @@
 //! 墨稿书库：与 Python server.py 兼容的目录约定与核心读写。
 mod book;
 mod classify;
+pub(crate) mod concurrency;
 mod fs_ops;
 mod tasks;
 mod util;
@@ -835,6 +836,11 @@ mod search_tests {
         let book = v
             .create_book("红莲渡鹤归", "测试意向")
             .expect("create_book");
+        assert_eq!(book["schemaVersion"].as_u64(), Some(1));
+        assert_eq!(
+            book["schemaMigrationHistory"].as_array().map(Vec::len),
+            Some(0)
+        );
         let slug = book.get("slug").and_then(|x| x.as_str()).unwrap();
         let res = v.search("红莲", 20).unwrap();
         assert_eq!(res["ok"], true);

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "schemaMigrationHistory": [],
+  "id": "interrupted-book",
+  "slug": "interrupted-book",
+  "title": "中断场面作品",
+  "tasks": [
+    { "id": "task-1", "status": "writing", "order": 1 }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-1",
+      "taskId": "task-1",
+      "order": 1,
+      "body": "已经提交的第一个场面。",
+      "handoffStatus": "stale",
+      "handoffError": "正文生产中，等待重新交接",
+      "production": {
+        "schemaVersion": 1,
+        "status": "pending",
+        "stage": "scene-writing",
+        "scenes": [
+          { "id": "scene-1", "status": "complete", "text": "已经提交的第一个场面。" },
+          { "id": "scene-2", "status": "writing", "text": "" }
+        ],
+        "errors": [],
+        "contextManifests": []
+      }
+    }
+  ],
+  "pipelineLog": []
+}

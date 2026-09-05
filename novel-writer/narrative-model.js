@@ -1,5 +1,5 @@
 /**
- * 叙事图谱模型：合并、画像、时间线、过滤、统计、Mermaid（GOAL-ULTIMATE Phase1）。
+ * 叙事图谱模型：合并、画像、时间线、过滤、统计、Mermaid。
  * 思想参考 screenplay-analyzer narrativeModel，运行时不依赖该仓库。
  */
 window.NOVEL_NARRATIVE = (() => {

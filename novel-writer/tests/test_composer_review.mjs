@@ -11,7 +11,12 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = { window: {}, console, JSON };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, "composer-review.js"), "utf8"), sandbox);
+vm.runInContext(fs.readFileSync(path.join(root, "chapter-state.js"), "utf8"), sandbox, {
+  filename: path.join(root, "chapter-state.js"),
+});
+vm.runInContext(fs.readFileSync(path.join(root, "composer-review.js"), "utf8"), sandbox, {
+  filename: path.join(root, "composer-review.js"),
+});
 const CR = sandbox.window.NOVEL_COMPOSER_REVIEW;
 
 assert.ok(CR, "NOVEL_COMPOSER_REVIEW must load");
@@ -26,6 +31,8 @@ function fixture() {
     handoffStatus: "done",
     handoffError: "",
     revisionHistory: [{ kind: "annotate", body: "更早的稿" }],
+    qualityReview: { overall: 9 },
+    production: { schemaVersion: 1, status: "done", stage: "done", gate: { accepted: true } },
   };
   const task = { id: "t1", status: "done" };
   return { project: { id: "p1", chapters: [chapter], tasks: [task] }, chapter, task };
@@ -109,6 +116,9 @@ const undoSnap = CR.seal(CR.capture(target.project, target.chapter, "annotate"),
 target.chapter.body = "生成后的正文";
 target.chapter.handoffStatus = "stale";
 target.chapter.handoffError = "交接失败";
+target.chapter.production.status = "needs_revision";
+target.chapter.production.gate = null;
+target.chapter.qualityReview = null;
 target.chapter.revisionHistory.push({ kind: "annotate", body: "原稿两百字" });
 target.task.status = "written";
 CR.restore(undoSnap, target.chapter, target.task);
@@ -117,6 +127,9 @@ assert.equal(target.chapter.handoffStatus, "done");
 assert.equal(target.chapter.handoffError, "");
 assert.equal(target.chapter.revisionHistory.length, 1, "修订史回到生成前");
 assert.equal(target.task.status, "done", "任务状态一起回退");
+assert.equal(target.chapter.production.status, "done", "质量生产投影也必须原子回退");
+assert.equal(target.chapter.production.gate.accepted, true);
+assert.equal(target.chapter.qualityReview.overall, 9);
 assert.ok(target.chapter.updatedAt, "回退也算一次修改，要更新时间戳");
 
 // 生成前本来没有修订史，撤销后不许留下空数组

@@ -12,6 +12,7 @@ window.NOVEL_WORKSPACE = (() => {
   let selectedPath = "";
   let selectedKind = ""; // file | dir
   let openMtime = 0;
+  let openRevision = null;
   let dirty = false;
   let fallbackRevision = 0;
   const editRevisions = window.NOVEL_UI_SHELL?.createRevisionTracker?.(() => "workspace") || {
@@ -30,6 +31,7 @@ window.NOVEL_WORKSPACE = (() => {
   let splitMode = "both"; // editor | preview | both
   let onStatus = () => {};
   let onBookMutated = null; // 章节写入后通知 app 重载内存
+  let getProjectReadOnlyReason = () => null;
   let previewSeq = 0; // 防预览竞态
   let previewTimer = null;
   /** @type {HTMLElement|null} */
@@ -85,6 +87,8 @@ window.NOVEL_WORKSPACE = (() => {
     if (isGenLocked()) {
       return { kind: "generation", message: "生成中，工作区暂时只读" };
     }
+    const projectReason = getProjectReadOnlyReason?.();
+    if (projectReason) return { kind: "schema", ...projectReason };
     const mirror = generatedMirrorInfo(path);
     return mirror ? { kind: "mirror", ...mirror } : null;
   }
@@ -109,11 +113,20 @@ window.NOVEL_WORKSPACE = (() => {
 
     const selectedFile = selectedKind === "file" ? selectedPath : openPath;
     const selectionIsMirror = !!generatedMirrorInfo(selectedFile);
+    const schemaReadOnly = reason?.kind === "schema";
+    for (const id of ["btnWsNewNote", "btnWsNewFolder"]) {
+      const button = $(id);
+      if (!button) continue;
+      button.disabled = isGenLocked() || schemaReadOnly;
+      button.title = schemaReadOnly ? reason.message : isGenLocked() ? "生成中暂不可修改文件" : "";
+    }
     for (const id of ["btnWsRename", "btnWsDelete"]) {
       const button = $(id);
       if (!button) continue;
-      button.disabled = isGenLocked() || selectionIsMirror || !selectedFile;
-      button.title = selectionIsMirror
+      button.disabled = isGenLocked() || schemaReadOnly || selectionIsMirror || !selectedFile;
+      button.title = schemaReadOnly
+        ? reason.message
+        : selectionIsMirror
         ? "系统生成镜像不能重命名或删除"
         : isGenLocked()
           ? "生成中暂不可修改文件"
@@ -128,6 +141,8 @@ window.NOVEL_WORKSPACE = (() => {
           ? "系统镜像 · 只读"
           : reason?.kind === "generation"
             ? "生成中 · 只读"
+            : reason?.kind === "schema"
+              ? "格式版本较新 · 只读保护"
             : "";
       meta.textContent = [base, suffix].filter(Boolean).join(" · ");
     }
@@ -197,23 +212,23 @@ window.NOVEL_WORKSPACE = (() => {
       blocks.push(
         `<pre class="md-code"><code class="lang-${escapeHtml(lang)}">${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`
       );
-      return `\u0000BLOCK${i}\u0000`;
+      return `\uE000BLOCK${i}\uE000`;
     });
     s = escapeHtml(s);
     s = s.replace(/^### (.+)$/gm, "<h3>$1</h3>");
     s = s.replace(/^## (.+)$/gm, "<h2>$1</h2>");
     s = s.replace(/^# (.+)$/gm, "<h1>$1</h1>");
     s = s.replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>");
-    s = s.replace(/^\- (.+)$/gm, "<li>$1</li>");
+    s = s.replace(/^- (.+)$/gm, "<li>$1</li>");
     s = s.replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`);
     s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
     s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
     s = s.replace(/^(?!<h[1-3]|<ul|<li|<blockquote|<pre)(.+)$/gm, (line) => {
-      if (!line.trim() || line.startsWith("\u0000BLOCK")) return line;
+      if (!line.trim() || line.startsWith("\uE000BLOCK")) return line;
       return `<p>${line}</p>`;
     });
-    s = s.replace(/\u0000BLOCK(\d+)\u0000/g, (_, i) => blocks[Number(i)] || "");
+    s = s.replace(/\uE000BLOCK(\d+)\uE000/g, (_, i) => blocks[Number(i)] || "");
     s = s.replace(/\n{2,}/g, "\n");
     return s;
   }
@@ -265,6 +280,13 @@ window.NOVEL_WORKSPACE = (() => {
 
   function guardFileMutate(actionLabel, path = openPath) {
     if (guardGenMutate(actionLabel)) return true;
+    const projectReason = getProjectReadOnlyReason?.();
+    if (projectReason) {
+      const msg = `无法${actionLabel || "修改文件"}：${projectReason.message}`;
+      setStatus(msg, "warn");
+      alert(msg);
+      return true;
+    }
     const mirror = generatedMirrorInfo(path);
     if (!mirror) return false;
     const msg = `无法${actionLabel || "修改"}「${mirror.path}」：${mirror.message}。`;
@@ -649,6 +671,7 @@ window.NOVEL_WORKSPACE = (() => {
       editRevisions.bump();
       openPath = file.path;
       openMtime = file.mtime || 0;
+      openRevision = file.revision || null;
       dirty = false;
       setSelected(file.path, "file");
       const ed = $("wsEditor");
@@ -683,6 +706,7 @@ window.NOVEL_WORKSPACE = (() => {
       path: openPath,
       revision: editRevisions.read(),
       content: ed?.value || "",
+      expectedRevision: openRevision,
     };
   }
 
@@ -708,9 +732,10 @@ window.NOVEL_WORKSPACE = (() => {
     const snapshot = captureSaveState();
     try {
       setStatus("保存中…", "busy");
-      const res = await Vault().writeFile(snapshot.slug, snapshot.path, snapshot.content);
+      const res = await Vault().writeFile(snapshot.slug, snapshot.path, snapshot.content, snapshot.expectedRevision);
       const sameDocument = snapshot.slug === slug && snapshot.path === openPath;
       if (sameDocument) openMtime = res.mtime || openMtime;
+      if (sameDocument) openRevision = res.revision || openRevision;
       const current = saveStateIsCurrent(snapshot);
       if (current) {
         dirty = false;
@@ -726,6 +751,15 @@ window.NOVEL_WORKSPACE = (() => {
       if (sameDocument) await refreshTree(true);
       return true;
     } catch (e) {
+      if (e.code === "FILE_CONFLICT" && snapshot.slug === slug && snapshot.path === openPath) {
+        const disk = await Vault().readFile(snapshot.slug, snapshot.path);
+        const choice = await window.NOVEL_VAULT_UI.compareStorageVersions({
+          title: "文件存在保存冲突", description: "磁盘文件已变化。取消会保留当前未保存草稿。",
+          local: snapshot.content, disk: disk.content,
+        });
+        if (choice === "disk") { await openFile(snapshot.path); return true; }
+        if (choice === "local") { openRevision = disk.revision; return saveCurrent(); }
+      }
       setStatus("保存失败", "err");
       alert("保存失败: " + (e.message || e));
       throw e;
@@ -993,7 +1027,7 @@ window.NOVEL_WORKSPACE = (() => {
   }
 
   async function doRestore(id, meta) {
-    if (guardGenMutate("恢复快照")) return;
+    if (guardFileMutate("恢复快照", "")) return;
     if (!slug || !id) return;
     const extra = meta ? snapshotSubLine(meta) : "";
     if (
@@ -1186,6 +1220,7 @@ window.NOVEL_WORKSPACE = (() => {
   function init(hooks = {}) {
     onStatus = hooks.onStatus || onStatus;
     onBookMutated = hooks.onBookMutated || null;
+    getProjectReadOnlyReason = hooks.getProjectReadOnlyReason || getProjectReadOnlyReason;
 
     $("btnWsToggleFiles")?.addEventListener("click", () => {
       const layout = document.querySelector("#view-workspace .ws-layout");
@@ -1320,8 +1355,9 @@ window.NOVEL_WORKSPACE = (() => {
     return dirty;
   }
 
-  function markClean(snapshot) {
+  function markClean(snapshot, saved) {
     if (snapshot && !saveStateIsCurrent(snapshot)) return false;
+    if (saved?.revision) openRevision = saved.revision;
     dirty = false;
     return true;
   }

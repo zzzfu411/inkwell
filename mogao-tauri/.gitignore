@@ -26,7 +26,10 @@ dist-ssr
 /release/*.exe
 /release/manifest.json
 /release/*.sha256
+/output/
 /output/playwright/
+/output/coverage*/
+/output/quality-fixture/
 /.playwright-cli/
 /.visual-vault/
 /playwright-report/

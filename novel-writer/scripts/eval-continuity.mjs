@@ -14,6 +14,7 @@ import fs from "fs";
 import path from "path";
 import vm from "vm";
 import { fileURLToPath } from "url";
+import { QUALITY_RUNTIME_FILES } from "./quality-source-contract.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -29,6 +30,9 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   minBeatSceneCoverage: 0.45,
   minDialogueRate: 0.05,
   maxStyleIssueRate: 0.5,
+  minProductionPassRate: 0.7,
+  minProductionQualityScore: 7,
+  minProductionSceneCoverage: 0.75,
 });
 
 function detectOpeningKindFallback(text) {
@@ -106,6 +110,24 @@ export function computeMetrics(project) {
     return Craft?.dialogueRate?.(chapter.body) ?? 0;
   });
 
+  const productionChapters = chapters.filter(
+    (chapter) => chapter?.production && (chapter.production.qualityReview || chapter.qualityReview)
+  );
+  const productionReviews = productionChapters
+    .map((chapter) => chapter.production?.qualityReview || chapter.qualityReview)
+    .filter(Boolean);
+  const productionPassed = productionReviews.filter(
+    (review) => review.verdict === "pass" && Number(review.overall) >= 7
+  ).length;
+  const productionScores = productionReviews.map((review) => Number(review.overall) || 0);
+  const productionSceneCoverage = productionReviews
+    .map((review) => Number(review.local?.sceneCoverage?.rate ?? review.local?.beatCoverage?.rate))
+    .filter(Number.isFinite);
+  const productionRevisions = productionChapters.reduce(
+    (sum, chapter) => sum + (Number(chapter.production?.revisions) || 0),
+    0
+  );
+
   return {
     generatedAt: new Date().toISOString(),
     chapters: chapters.length,
@@ -143,6 +165,16 @@ export function computeMetrics(project) {
       styleIssueRate: ratio(styleIssues.length, chapters.length),
       staleHandoffs,
       meanChars: Math.round(meanWords),
+    },
+    production: {
+      chapters: productionChapters.length,
+      reviews: productionReviews.length,
+      passed: productionPassed,
+      passRate: productionReviews.length ? productionPassed / productionReviews.length : 1,
+      meanQualityScore: productionScores.length ? mean(productionScores) : 0,
+      meanSceneCoverage: productionSceneCoverage.length ? mean(productionSceneCoverage) : 0,
+      needsRevision: productionChapters.filter((chapter) => chapter.production?.status === "needs_revision").length,
+      revisions: productionRevisions,
     },
   };
 }
@@ -199,6 +231,30 @@ export function evaluateThresholds(metrics, thresholds = DEFAULT_THRESHOLDS) {
       limit: thresholds.maxStyleIssueRate,
     },
   ];
+  // 没有 production 报告的旧项目不受新门槛影响；新引擎一旦产生报告，
+  // 离线评测就必须检查运行时同一组质量指标。
+  if ((metrics.production?.chapters || 0) > 0) {
+    checks.push(
+      {
+        id: "productionPassRate",
+        ok: (metrics.production?.passRate || 0) >= thresholds.minProductionPassRate,
+        value: metrics.production?.passRate || 0,
+        limit: thresholds.minProductionPassRate,
+      },
+      {
+        id: "productionQualityScore",
+        ok: (metrics.production?.meanQualityScore || 0) >= thresholds.minProductionQualityScore,
+        value: metrics.production?.meanQualityScore || 0,
+        limit: thresholds.minProductionQualityScore,
+      },
+      {
+        id: "productionSceneCoverage",
+        ok: (metrics.production?.meanSceneCoverage || 0) >= thresholds.minProductionSceneCoverage,
+        value: metrics.production?.meanSceneCoverage || 0,
+        limit: thresholds.minProductionSceneCoverage,
+      }
+    );
+  }
   return {
     pass: checks.every((check) => check.ok),
     checks,
@@ -214,6 +270,7 @@ const LOWER_BETTER = new Set([
   "craft.styleIssueRate",
   "craft.staleHandoffs",
   "retrieval.coreTruncations",
+  "production.needsRevision",
 ]);
 
 function pick(metrics, dotted) {
@@ -233,6 +290,10 @@ export function compareMetrics(before, after) {
     "craft.styleIssueRate",
     "retrieval.hitCoverage",
     "retrieval.coreTruncations",
+    "production.passRate",
+    "production.meanQualityScore",
+    "production.meanSceneCoverage",
+    "production.needsRevision",
   ];
   const deltas = [];
   const regressions = [];
@@ -247,37 +308,31 @@ export function compareMetrics(before, after) {
   return { deltas, regressions, improved: regressions.length === 0 };
 }
 
-function loadRuntime() {
+export function loadRuntime({ modelAudit = null } = {}) {
   const sandbox = {
     window: {
       NOVEL_STORE: {
         uid: () => globalThis.crypto.randomUUID(),
       },
+      NOVEL_MODEL_AUDIT: modelAudit,
     },
     console,
     fetch: globalThis.fetch,
     TextDecoder: globalThis.TextDecoder,
     AbortController: globalThis.AbortController,
+    DOMException: globalThis.DOMException,
     crypto: globalThis.crypto,
+    structuredClone: globalThis.structuredClone,
     setTimeout,
     clearTimeout,
   };
-  for (const file of [
-    "config.js",
-    "prompts.js",
-    "craft.js",
-    "context.js",
-    "rag.js",
-    "api.js",
-    "pipeline.js",
-    "harness.js",
-  ]) {
+  for (const file of QUALITY_RUNTIME_FILES) {
     vm.runInNewContext(fs.readFileSync(path.join(root, file), "utf8"), sandbox, { filename: file });
   }
   return sandbox.window;
 }
 
-function ensureProjectShape(project) {
+export function ensureProjectShape(project) {
   project.chapters = Array.isArray(project.chapters) ? project.chapters : [];
   project.tasks = Array.isArray(project.tasks) ? project.tasks : [];
   project.memoryRoll = Array.isArray(project.memoryRoll) ? project.memoryRoll : [];
@@ -327,21 +382,28 @@ export function compareProjectFiles(beforePath, afterPath) {
   };
 }
 
-export async function runRealEvaluation(seedPath, env = process.env) {
+export async function runRealEvaluation(seedPath, env = process.env, options = {}) {
   if (env.INKWELL_EVAL_CONFIRM !== "YES") {
     throw new Error("真实评测会调用模型并可能产生费用；请显式设置 INKWELL_EVAL_CONFIRM=YES");
   }
   if (!env.INKWELL_API_KEY) throw new Error("缺少 INKWELL_API_KEY");
   if (!seedPath) throw new Error("请提供包含 story bible 与 tasks 的 seed-project.json");
   const project = ensureProjectShape(JSON.parse(fs.readFileSync(path.resolve(seedPath), "utf8")));
-  const runtime = loadRuntime();
+  const runtime = loadRuntime({ modelAudit: options.modelAudit || null });
   const defaults = runtime.NOVEL_DEFAULTS;
   const cfg = {
     ...defaults,
     baseUrl: env.INKWELL_BASE_URL || defaults.baseUrl,
     apiKey: env.INKWELL_API_KEY,
     model: env.INKWELL_MODEL || defaults.model || "gemini-3.6-flash",
+    temperature: Number.isFinite(Number(env.INKWELL_EVAL_TEMPERATURE))
+      ? Number(env.INKWELL_EVAL_TEMPERATURE)
+      : undefined,
+    seed: Number.isInteger(Number(env.INKWELL_EVAL_SEED)) ? Number(env.INKWELL_EVAL_SEED) : undefined,
     harnessEnabled: true,
+    productionEngineEnabled: env.INKWELL_EVAL_PRODUCTION !== "0",
+    productionMode: env.INKWELL_EVAL_PRODUCTION_MODE || defaults.productionMode || "chapter",
+    productionQualityPolicy: env.INKWELL_EVAL_STRICT === "1" ? "strict" : "warn",
     ragEnabled: true,
     ragUseEmbeddings: env.INKWELL_EVAL_EMBEDDINGS === "1",
     continuityReviewEnabled: true,
@@ -349,6 +411,13 @@ export async function runRealEvaluation(seedPath, env = process.env) {
     chapterBeatEnabled: env.INKWELL_EVAL_BEAT !== "0",
     proseLintEnabled: env.INKWELL_EVAL_LINT !== "0",
     continuityReviewPolicy: env.INKWELL_EVAL_STRICT === "1" ? "strict" : "warn",
+    chapterTargetWords: Math.max(300, Number(env.INKWELL_EVAL_CHAPTER_TARGET) || defaults.chapterTargetWords || 2000),
+    outputReserveTokens: Math.max(512, Number(env.INKWELL_EVAL_OUTPUT_TOKENS) || defaults.outputReserveTokens || 3500),
+    productionChapterOutputTokens: Math.max(
+      512,
+      Number(env.INKWELL_EVAL_OUTPUT_TOKENS) || defaults.productionChapterOutputTokens || defaults.outputReserveTokens || 3500
+    ),
+    autoChapterDelayMs: 0,
   };
   const maxChapters = Math.max(1, Number(env.INKWELL_EVAL_MAX_CHAPTERS) || 30);
   const pending = project.tasks
@@ -356,21 +425,42 @@ export async function runRealEvaluation(seedPath, env = process.env) {
     .sort((a, b) => (a.order || 0) - (b.order || 0))
     .filter((t) => t.status !== "done")
     .slice(0, maxChapters);
+  const runErrors = [];
   for (const task of pending) {
-    await runtime.NOVEL_PIPELINE.autoChapterCycle(project, cfg, task, {
-      onStatus: (status) => console.log(`[${task.id}] ${status}`),
-    });
+    options.onTaskStart?.(task, project, cfg);
+    try {
+      await runtime.NOVEL_PIPELINE.autoChapterCycle(project, cfg, task, {
+        onStatus: (status) => {
+          options.onStatus?.(task, status);
+          if (!options.quiet) console.log(`[${task.id}] ${status}`);
+        },
+        production: cfg.productionEngineEnabled,
+      });
+      options.onTaskComplete?.(task, project, cfg);
+    } catch (error) {
+      const failure = { taskId: task.id, code: error?.code || "EVAL_TASK_FAILED", message: error?.message || String(error) };
+      runErrors.push(failure);
+      options.onTaskError?.(task, error, project, cfg);
+      if (!options.continueOnError) throw error;
+      if (!options.quiet) console.error(`[${task.id}] ${failure.code}: ${failure.message}`);
+    }
   }
   const metrics = computeMetrics(project);
   const verdict = evaluateThresholds(metrics);
   const report = {
     config: {
       model: cfg.model,
+      temperature: cfg.temperature ?? null,
+      seed: cfg.seed ?? null,
       maxChapters,
       embeddings: cfg.ragUseEmbeddings,
       chapterBeat: cfg.chapterBeatEnabled,
       proseLint: cfg.proseLintEnabled,
+      productionEngine: cfg.productionEngineEnabled,
+      productionMode: cfg.productionMode,
+      qualityPolicy: cfg.productionQualityPolicy,
     },
+    errors: runErrors,
     metrics,
     verdict,
   };
@@ -379,8 +469,9 @@ export async function runRealEvaluation(seedPath, env = process.env) {
     report.comparison = compareMetrics(baseline.metrics, metrics);
   }
   const out = path.resolve(env.INKWELL_EVAL_OUT || `inkwell-continuity-eval-${Date.now()}.json`);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, JSON.stringify({ report, project }, null, 2), "utf8");
-  return { out, report };
+  return { out, report, project };
 }
 
 function printJson(value) {

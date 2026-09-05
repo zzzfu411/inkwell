@@ -1,5 +1,5 @@
 /**
- * 章节边界检测与智能切片（GOAL-ULTIMATE Phase1）。
+ * 章节边界检测与智能切片。
  * 思想参考 screenplay-analyzer chapterSplitter，运行时不依赖该仓库。
  */
 window.NOVEL_CHAPTER_SPLIT = (() => {

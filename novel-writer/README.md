@@ -1,65 +1,41 @@
-# Inkwell（墨稿）· 前端与书库逻辑
+# Inkwell（墨稿）· canonical UI
 
-本目录是 **静态前端 +（可选）Python 开发服务器**，正式桌面客户端：
+本仓库是 Inkwell 的唯一前端源、纯领域/应用层和可选 Python 调试后端。正式桌面客户端位于同级 `mogao-tauri/`，生产后端是 Rust/Tauri；`server.py` 只用于 debug compatibility。
 
-```text
-../mogao-tauri/          ← Rust + Tauri
-  release/Inkwell.exe    ← 双击运行（体积以 release/manifest.json 为准）
-```
+## 当前文档入口
 
-| 语言 | 名称 |
-|------|------|
-| English | **Inkwell** |
-| 中文 | **墨稿** |
+- [当前架构](./docs/ARCHITECTURE.md)
+- [当前工程审计与 Phase 0–7 执行记录](./docs/ENGINEERING-AUDIT-2026-09.md)
+- [不可变发布手册](../mogao-tauri/docs/RELEASE.md)
 
-- 方案：[`MATURITY.md`](./MATURITY.md) · vault 设计：[`PLAN.md`](./PLAN.md)  
-- 变更：[`CHANGELOG.md`](./CHANGELOG.md)
+以上三处是当前入口。旧版路线与 GOAL 文档已归档，不参与实现决策。
 
-## 推荐启动（Tauri）
+## 开发运行
 
-```bat
-双击  ..\mogao-tauri\release\Inkwell.exe
-```
+推荐从正式客户端启动：
 
-或开发：
-
-```bat
+```powershell
 cd ..\mogao-tauri
+npm install
 npm run tauri dev
 ```
 
-书库默认在 exe 旁或 `mogao-tauri/vault/books/`。
+完整本地门禁：
 
-## 本目录还做什么？
+```powershell
+cd ..\mogao-tauri
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\ci.ps1
+```
 
-| 内容 | 用途 |
-|------|------|
-| `index.html` / `*.js` / `styles.css` | Inkwell / Tauri 加载的 UI |
-| `samples/` | 示例策划 |
-| `server.py` / `desktop.py` | 仅开发调试（可选） |
-| `tests/` | 书库与叙事逻辑单测 |
+Python 开发服务可用 `start.bat` 启动，但它没有正式客户端的会话 token、DPAPI 密钥和完整 Vault 安全边界，不得作为生产入口。
 
-**已移除**：Python 版独立 exe 打包。
+## Source-of-truth 约束
 
-## 可选：Python 开发服务（DEBUG ONLY）
+- `index.html` 显式声明静态 IIFE 脚本装配顺序。
+- `mogao-tauri/ui-files.txt` 声明正式 UI 文件集。
+- 日常同步只更新 `mogao-tauri/src-tauri/ui-embed/`，绝不更新 `release/`。
+- Vault 是持久化权威；localStorage 仅做有界恢复。
+- 新安装默认仍使用 Harness。候选整章生产引擎只有在真实模型 A/B 与人工盲评发布门通过后才可成为默认。
+- 设置 → 高级可导出本地脱敏诊断；报告不含正文、提示词、密钥、URL 或原始错误消息。
 
-`server.py` / `desktop.py` / `start.bat` **仅调试**，存在：
-
-- 无 `X-Mogao-Token` 鉴权  
-- CORS 与写盘语义可能落后于 Tauri  
-
-**生产请只用** `..\mogao-tauri\release\Inkwell.exe`。
-
-## 无状态长篇写作
-
-Inkwell 不依赖 Gemini 对话历史。每次写章都会从同一本书重建：主线、任务、Canon、开放钩子、连续性风险、人物状态、时间线、风格圣经、上章尾和 RAG 证据；生成后再执行连续性审查与章后交接。
-
-- 正式写章优先使用“按任务写/续本章”。
-- 普通“续写/生成”、选段重写、批注修订默认也会自动交接；关闭后章节会显示 `⚠ 待交接`。
-- 手工编辑后请重新执行“本章→摘要+关系”。
-- 写下一章前会把前文所有 `⚠ 待交接` 的章按顺序补上摘要；补交接不改正文，只补记忆。
-- 严格 RAG/审查模式可在已有历史但检索失败、前文补交接失败或出现 blocker 时停止交接。
-- 审查报出的“任务未覆盖”没有正文落点，只记进风险账，需要作者自己补写；带正文证据的问题才提供“局部修复”。
-- 可选真实模型评测见 `scripts/eval-continuity.mjs`；必须显式设置 `INKWELL_EVAL_CONFIRM=YES`。
-
-前端 **0.19.x**；正式客户端见 `mogao-tauri`（产品名 **Inkwell**）。常驻目标见 `../mogao-tauri/GOAL-MATURE.md`。
+当前前端版本：`0.19.x`。

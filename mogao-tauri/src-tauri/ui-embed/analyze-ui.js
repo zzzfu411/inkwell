@@ -1,5 +1,5 @@
 /**
- * 叙事分析工作台 UI（GOAL-ULTIMATE Phase2）
+ * 叙事分析工作台 UI。
  * 切章预览 · 长任务分析 · 进度续跑 · 图谱筛选 · 档案 · 时间线
  */
 window.NOVEL_ANALYZE_UI = (() => {
@@ -13,6 +13,12 @@ window.NOVEL_ANALYZE_UI = (() => {
   let checkpointChunks = null;
   let checkpointSlug = null;
   let checkpointLoadPromise = null;
+  let analysisWriter = null;
+  function writeAnalysisFile(slug, path, content) {
+    return analysisWriter?.slug === slug
+      ? analysisWriter.write(path, content)
+      : Vault().writeFile(slug, path, content);
+  }
   const ANALYSIS_STATUS_LABELS = Object.freeze({
     idle: "等待识别",
     detected: "识别完成",
@@ -362,8 +368,8 @@ window.NOVEL_ANALYZE_UI = (() => {
     await V.fsMkdir?.(slug, "分析");
     await V.fsMkdir?.(slug, "分析/extractions");
     if (initialize) {
-      await V.writeFile(slug, "分析/source.txt", String(payload.fullText || ""));
-      await V.writeFile(
+      await writeAnalysisFile(slug, "分析/source.txt", String(payload.fullText || ""));
+      await writeAnalysisFile(
         slug,
         "分析/chapters.json",
         JSON.stringify(chapterManifest(payload.chunks, payload.source_sig), null, 2)
@@ -371,7 +377,7 @@ window.NOVEL_ANALYZE_UI = (() => {
     }
     // Commit order is intentional: graph first, meta last. A completed run
     // remains "finalizing" until report, extraction mirrors and book.json save.
-    await V.writeFile(
+    await writeAnalysisFile(
       slug,
       "分析/graph.json",
       JSON.stringify(payload.graph || { nodes: [], edges: [] }, null, 2)
@@ -380,7 +386,7 @@ window.NOVEL_ANALYZE_UI = (() => {
       payload.phase === "final" && payload.meta?.status === "done"
         ? { ...payload.meta, status: "finalizing", final_status: "done" }
         : payload.meta;
-    await V.writeFile(slug, "分析/meta.json", JSON.stringify(metaForDisk(checkpointMeta), null, 2));
+    await writeAnalysisFile(slug, "分析/meta.json", JSON.stringify(metaForDisk(checkpointMeta), null, 2));
   }
 
   async function readJsonFile(slug, path) {
@@ -396,13 +402,23 @@ window.NOVEL_ANALYZE_UI = (() => {
     checkpointSlug = slug;
     checkpointLoadPromise = (async () => {
       try {
+        const files = new Set();
+        const collect = (nodes) => {
+          for (const node of nodes || []) {
+            if (node.type === "dir") collect(node.children);
+            else files.add(node.path);
+          }
+        };
+        collect((await Vault().fileTree(slug)).tree);
+        if (!files.has("分析/meta.json") || !files.has("分析/graph.json")) return null;
+        const optional = (path) => files.has(path) ? Vault().readFile(slug, path) : Promise.resolve(null);
         const meta = await readJsonFile(slug, "分析/meta.json");
         if (!meta || meta.schema_version !== 2) return null;
         const [graph, chapters, sourceFile, reportFile] = await Promise.all([
           readJsonFile(slug, "分析/graph.json"),
-          readJsonFile(slug, "分析/chapters.json").catch(() => null),
-          Vault().readFile(slug, "分析/source.txt").catch(() => null),
-          Vault().readFile(slug, "分析/report.md").catch(() => null),
+          optional("分析/chapters.json").then((file) => file ? JSON.parse(file.content) : null),
+          optional("分析/source.txt"),
+          optional("分析/report.md"),
         ]);
         lastMeta = meta;
         checkpointGraph = graph || { nodes: [], edges: [] };
@@ -456,7 +472,9 @@ window.NOVEL_ANALYZE_UI = (() => {
         const message = String(error?.message || "");
         const missing = status === 404 || (status === 400 && /^not found:/i.test(message));
         if (!missing) {
-          throw new Error(`无法清理旧分析检查点 ${path}：${message || `HTTP ${status || "未知"}`}`);
+          throw new Error(`无法清理旧分析检查点 ${path}：${message || `HTTP ${status || "未知"}`}`, {
+            cause: error,
+          });
         }
       }
     }
@@ -476,11 +494,10 @@ window.NOVEL_ANALYZE_UI = (() => {
     }
     try {
       if (graph) {
-        await V.writeFile(slug, "分析/graph.json", JSON.stringify(graph, null, 2));
-        await V.writeFile(slug, "关系/graph.json", JSON.stringify(graph, null, 2));
+        await writeAnalysisFile(slug, "分析/graph.json", JSON.stringify(graph, null, 2));
       }
       if (reportMd)
-        await V.writeFile(slug, "分析/report.md", reportMd);
+        await writeAnalysisFile(slug, "分析/report.md", reportMd);
       if (Array.isArray(extractions)) {
         for (let i = 0; i < extractions.length; i++) {
           const ex = extractions[i];
@@ -492,7 +509,7 @@ window.NOVEL_ANALYZE_UI = (() => {
             ex.chunk_id ||
             ex.id ||
             String(i).padStart(4, "0");
-          await V.writeFile(
+          await writeAnalysisFile(
             slug,
             `分析/extractions/${id}.json`,
             JSON.stringify(ex, null, 2)
@@ -510,7 +527,7 @@ window.NOVEL_ANALYZE_UI = (() => {
   async function commitAnalysisMeta(slug, meta) {
     if (!slug || !meta || !deps.vaultOnline?.()) return;
     try {
-      await Vault().writeFile(slug, "分析/meta.json", JSON.stringify(metaForDisk(meta), null, 2));
+      await writeAnalysisFile(slug, "分析/meta.json", JSON.stringify(metaForDisk(meta), null, 2));
     } catch (cause) {
       const error = new Error(`analysis final commit failed: ${cause?.message || cause}`);
       error.code = "CHECKPOINT_WRITE_FAILED";
@@ -580,6 +597,7 @@ window.NOVEL_ANALYZE_UI = (() => {
     let activeHooks = null;
 
     try {
+      analysisWriter = deps.vaultOnline?.() && p.slug ? await Vault().createFileWriter(p.slug, "分析/") : null;
       const hooks = {
         initializeCheckpoint: async (payload) => {
           await writeCheckpointFiles(p.slug, payload, { initialize: true });
@@ -599,7 +617,7 @@ window.NOVEL_ANALYZE_UI = (() => {
               payload?.chunk?.id ||
               String(payload?.index ?? 0).padStart(4, "0");
             const body = payload?.extraction || payload;
-            await Vault().writeFile(
+            await writeAnalysisFile(
               slug,
               `分析/extractions/${id}.json`,
               JSON.stringify(body, null, 2)
@@ -631,6 +649,7 @@ window.NOVEL_ANALYZE_UI = (() => {
       checkpointGraph = result.graph;
       p.graph = result.graph;
       if (typeof deps.markDirty === "function") deps.markDirty(p);
+      deps.onGraphUpdated?.(p);
       lastMeta = result.meta;
       updateProgress({ ...result.meta, status: "finalizing" });
       applyFilterAndRender();
@@ -704,6 +723,7 @@ window.NOVEL_ANALYZE_UI = (() => {
         alert("分析失败: " + (e.message || e));
       }
     } finally {
+      analysisWriter = null;
       running = false;
       $("btnAnStart") && ($("btnAnStart").disabled = false);
       $("btnAnPause") && ($("btnAnPause").disabled = true);

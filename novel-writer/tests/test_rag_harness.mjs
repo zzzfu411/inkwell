@@ -28,8 +28,8 @@ const sandbox = {
   },
 };
 
-for (const f of ["prompts.js", "craft.js", "context.js", "rag.js", "harness.js"]) {
-  vm.runInNewContext(fs.readFileSync(path.join(root, f), "utf8"), sandbox);
+for (const f of ["prompts.js", "craft.js", "memory-reducers.js", "context-budget.js", "context-evidence.js", "context.js", "rag.js", "harness.js"]) {
+  vm.runInNewContext(fs.readFileSync(path.join(root, f), "utf8"), sandbox, { filename: path.join(root, f) });
 }
 
 const Rag = sandbox.window.NOVEL_RAG;

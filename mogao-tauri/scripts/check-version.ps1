@@ -27,6 +27,7 @@ $versions = [ordered]@{
   rust = Match-Version (Join-Path $tauri "src-tauri\src\vault\mod.rs") 'VERSION:\s*&str\s*=\s*"([^"]+)"' "Rust"
   frontend = Match-Version (Join-Path $writer "config.js") 'NOVEL_APP_VERSION\s*=\s*"([^"]+)"' "frontend"
   python = Match-Version (Join-Path $writer "server.py") '(?m)^VERSION\s*=\s*"([^"]+)"' "Python"
+  httpContract = (Get-Content (Join-Path $writer "tests\fixtures\http-contract\v1.json") -Raw -Encoding UTF8 | ConvertFrom-Json).productVersion
   html = Match-Version (Join-Path $writer "index.html") 'id="appVersion"[^>]*>v([0-9][^<]*)<' "index.html"
   appFallback = (Match-All-Versions (Join-Path $writer "app.js") 'NOVEL_APP_VERSION \|\| "([^"]+)"' "app.js fallback") -join ","
 }

@@ -3,6 +3,7 @@ param(
   [string]$Suite = "visual",
   [switch]$KeepArtifacts,
   [switch]$UpdateSnapshots,
+  [string]$Grep = "",
   [ValidateSet("msedge", "chrome", "firefox", "webkit")]
   [string]$Browser = "msedge"
 )
@@ -49,6 +50,9 @@ if ($KeepArtifacts) {
   if (-not $artifactRoot.StartsWith($allowedRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "unsafe browser artifact path: $artifactRoot"
   }
+  if (Test-Path -LiteralPath $artifactRoot) {
+    Remove-Item -LiteralPath $artifactRoot -Recurse -Force
+  }
 }
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
@@ -56,8 +60,9 @@ $port = Get-FreeTcpPort
 $baseUrl = "http://127.0.0.1:$port/"
 $vault = Join-Path $tempRoot "vault"
 $settings = Join-Path $tempRoot "mogao-settings.json"
-$serverStdout = Join-Path $tempRoot "server.stdout.log"
-$serverStderr = Join-Path $tempRoot "server.stderr.log"
+$logRoot = if ($KeepArtifacts) { $artifactRoot } else { $tempRoot }
+$serverStdout = Join-Path $logRoot "server.stdout.log"
+$serverStderr = Join-Path $logRoot "server.stderr.log"
 $server = $null
 $oldPort = $env:MOGAO_PORT
 $oldVault = $env:MOGAO_VAULT
@@ -84,21 +89,44 @@ try {
   }
 
   $ready = $false
+  $lastProbeError = ""
   for ($attempt = 0; $attempt -lt 60; $attempt++) {
     if ($server.HasExited) { break }
     try {
-      $health = Invoke-RestMethod -Uri ($baseUrl + "api/health") -TimeoutSec 1
+      # Windows PowerShell 5.1 没有 Invoke-RestMethod -NoProxy。优先使用
+      # 系统 curl 的 --noproxy，避免机器级 HTTP_PROXY 把 loopback 探针送到外部代理。
+      $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+      if ($curl) {
+        $rawHealth = (& $curl.Source --noproxy "*" --silent --show-error --fail --max-time 1 ($baseUrl + "api/health") 2>&1 | Out-String).Trim()
+        $curlExit = $LASTEXITCODE
+        if ($curlExit -ne 0) { throw "curl health probe exited ${curlExit}: $rawHealth" }
+        $health = $rawHealth | ConvertFrom-Json
+      } else {
+        $client = New-Object System.Net.WebClient
+        try {
+          $client.Proxy = [System.Net.GlobalProxySelection]::GetEmptyWebProxy()
+          $client.Encoding = [System.Text.Encoding]::UTF8
+          $health = $client.DownloadString($baseUrl + "api/health") | ConvertFrom-Json
+        } finally {
+          $client.Dispose()
+        }
+      }
       if ($health.ok) { $ready = $true; break }
-    } catch {}
+    } catch {
+      $lastProbeError = $_.Exception.ToString()
+    }
     Start-Sleep -Milliseconds 200
   }
   if (-not $ready) {
-    $log = if (Test-Path -LiteralPath $serverStderr) { Get-Content -Raw -LiteralPath $serverStderr } else { "" }
-    throw "debug server did not become ready at $baseUrl`n$log"
+    $stdoutLog = if (Test-Path -LiteralPath $serverStdout) { Get-Content -Raw -LiteralPath $serverStdout } else { "" }
+    $stderrLog = if (Test-Path -LiteralPath $serverStderr) { Get-Content -Raw -LiteralPath $serverStderr } else { "" }
+    $exitDetail = if ($server.HasExited) { "exit code $($server.ExitCode)" } else { "still running" }
+    throw "debug server did not become ready at $baseUrl ($exitDetail)`nLast probe error:`n$lastProbeError`nstdout:`n$stdoutLog`nstderr:`n$stderrLog"
   }
 
   $args = @("test", $specRelative, "--config", $config, "--workers=1")
   if ($UpdateSnapshots) { $args += "--update-snapshots=all" }
+  if ($Grep) { $args += @("--grep", $Grep) }
   Push-Location $tauri
   try {
     & $playwright @args

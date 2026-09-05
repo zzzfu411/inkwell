@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Narrative Production Engine v1
+
+- 完成 Phase 8 质量证据收口：每次 fixture/live A/B 记录 27 个生成、上下文、prompt、评分与 gate 关键源码的 LF 规范化 SHA-256 manifest，并用 corpus/source/model/judge/time 生成唯一 run id；旧报告遇到源码漂移会自动回到 `hold`。
+- 默认引擎提升改为 schema-v2 证据合同：浏览器策略对残缺或误改的 `pass` fail-closed，`quality-ab.mjs promote` 只为当前源码上的 live/pass 报告生成去正文 bundle，CI 再核对 report/evidence/corpus/source digest。当前仍无真实付费盲评证据，因此默认继续使用 Harness。
+- 新增 47 个 classic scripts 的显式 composition contract；所有 `NOVEL_*` provider/reference 必须分类为 eager、deferred、optional 或 host external，静态测试与 boot 前后断言会提前拦截重复 provider、逆序、缺失和未登记依赖。canonical/embed 现为 53 项，旧 49 项 release 未被日常同步改写。
+- 重构候选正文生成边界：场面契约仍负责结构，但默认只发起一次整章模型调用，原子提交完整正文，避免逐场独立采样造成复述、声线漂移和拼接接缝；逐场模式仅保留兼容回退。
+- 完成 Phase 4 的发布级质量实验框架：固定 6 个题材 × 8 章，旧 Harness/候选引擎同协议 A/B，保存去密钥 prompt、context manifest、正文 hash、critic 与失败状态；生成 48 组确定性随机盲评包，并把本地信号、独立模型 judge、人工评分严格分层。
+- 新增可复现质量 gate：fixture 仅可得到 `calibration-pass` 且永不具备发布资格；真实报告还必须满足 96 份工件完整、blocker/Canon 为零、关键维度改善、人工中位不下降。失败样本进入回归 fixture，不继续堆 writer prompt。
+- 新增 `quality-release.js` 默认决策 `hold`。完整真实 A/B 与人工盲评通过前，新安装继续使用旧 Harness，候选引擎只允许用户手动开启，避免用引擎自评证明默认切换。
+- 将正式写章默认重构为 `Chapter Contract → Scene Contracts → 场面检查点 → Semantic Critic → 有界救稿 → Quality Gate → Handoff`，半场失败会回滚到最近提交点，低质量正文停在 `needs_revision`。
+- 新增按可信度分层的 Evidence Pack、上下文使用/裁剪 Manifest、作者锁定细纲、实测风格轮廓和八维叙事质量评分；RAG 仅作为 reference，不再覆盖 locked/continuity 事实。
+- 质量重试不重复追加场面；作者改稿开启新的有限救稿周期并保留累计审计记录，直接章后交接不能绕过严格质量闸门。
+- 恢复时用 `bodyAuthoritative/bodySig` 区分压缩后的完整正文，严格规划器缺结果也会明确阻断，不再静默拼接通用占位场面。
+- 新增无 DOM 的 `production-state.js` 作为正文/质量/交接状态边界；缓存恢复、Vault 装载、工作区 Markdown、冲突裁决和最终交接都会核对正文签名，外部改稿不能再携带旧评分进入 `done`。
+- 新增根/production `schemaVersion=1`、幂等相邻迁移与迁移审计；旧书、空书、中断场面、外部改稿和 recovery 均有 golden fixture，未知更高版本在保存、批量迁入、工作区与快照恢复前进入只读保护。
+- 新增唯一 `chapter-state.js` 转换边界和合法转换表，task/production/handoff 终态不再由 app、Pipeline、Harness 或撤销卡各自拼装；撤销会原子恢复正文关联的 production、质量报告、任务和交接投影。
+- 连续性自动修订提前到 Semantic Critic 之前；strict 交接必须具有已验收状态和匹配正文签名，`pending` 不再被误当成“未阻断即通过”。暂停/失败记录 `lastStableState`，交接失败的已验收正文可安全重试。
+- 新增软件工程审计、分阶段重构路线和架构非回归测试：先封状态不变量，再拆用例/控制器、统一双后端契约、建立文章质量 A/B 发布门和不可变 release。
+- 完成 Phase 2 前端拆分：写作、持久化、冲突、策划、交接、旧链路适配、上下文证据/预算/记忆均变为无 DOM 的显式依赖模块；`app.js`、`pipeline.js`、`context.js` 分别降至 4,500/1,400/1,500 行硬上限以内，并以直接行为测试和 49 条浏览器回归锁定现有 UI。
+- 修复抢占型并发锁：交接或分析被修复任务顶替后，旧任务的 `finally` 不再能释放后继任务持有的生成锁，停止按钮也始终作用于当前运行。
+- 完成 Phase 3 双后端合同：Rust/Python 共同执行 HTTP contract v1，统一核心路由的状态码、`error.code`、内容世代、章节并发基线与外部冲突 warning；新增复用正式 Axum 路由的无窗口 `inkwell-http` 入口和 Rust 浏览器 E2E，并明确 Python 兼容层冻结于 0.20.x。
+- `productionEngineEnabled=false` 或关闭写前细纲时保留旧 Harness 兼容档；release/ui 与 Tauri embed 由 manifest 同步并通过全量回归。
+- 浏览器冒烟探针改为跨 Windows PowerShell 版本稳定的 loopback `curl --noproxy`，失败时输出服务日志与最后一次探针异常。
+
 ## 0.19.0 — 前端分层 + 编辑器热路径 + 假保存冲突修复
 
 前端：
@@ -76,7 +100,7 @@
 - Composer「从当前位置续写」改为走 `pipeline.continueChapter`：检索 → 续写细纲 → 追加正文 → 套话检查 → 可选交接。
 - 已写完的章可以续写追加，自动连写重入仍不会叠章覆盖。
 - 续写细纲只规划文末往后 2–3 场，不重写已有正文。
-- 常驻 Goal 见 `mogao-tauri/GOAL-MATURE.md`：一直迭代到成熟。
+- 历史常驻 Goal 已归档到 `mogao-tauri/docs/history/GOAL-MATURE.md`。
 
 ## 0.12.0 — 自动连写读起来像人写
 
@@ -264,7 +288,7 @@
 
 ### 工程
 - `tests/test_vault.py`、`scripts/smoke.py`
-- `MATURITY.md` 方案与验收清单
+- 已归档的 `docs/history/MATURITY.md` 方案与验收清单
 - `library.js` 模块
 
 ## 0.1.0

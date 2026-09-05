@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sandbox = { window: {}, console };
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(root, "graph-panel.js"), "utf8"), sandbox);
+vm.runInContext(fs.readFileSync(path.join(root, "graph-panel.js"), "utf8"), sandbox, {
+  filename: path.join(root, "graph-panel.js"),
+});
 const G = sandbox.window.NOVEL_GRAPH_PANEL;
 
 assert.ok(G, "NOVEL_GRAPH_PANEL must load");
@@ -150,5 +152,26 @@ assert.equal(
   "旧字段名 nodes/edges 也认"
 );
 assert.equal(G.statsLine({}, graph, [], null), "人物 4 · 关系 3 · 章节 0");
+
+const profileHtml = G.renderProfileHtml(
+  {
+    label: "<林清>",
+    degree: 2,
+    neighbors: [{ label: "谢宴", relationship: "盟友", chapter: "第二章" }],
+  },
+  "lin"
+);
+assert.match(profileHtml, /&lt;林清&gt;/);
+assert.match(profileHtml, /谢宴/);
+assert.match(G.renderProfileHtml(null, ""), /选择一人/);
+assert.match(G.renderTracksHtml(grouped), /林清 × 谢宴/);
+assert.match(G.renderTracksHtml(null), /模块未加载/);
+assert.match(G.renderEdgeRowsHtml(rows), /×3/);
+assert.match(G.renderEdgeRowsHtml([]), /暂无关系证据/);
+assert.match(G.renderNodeButtonsHtml(buttons), /aria-pressed="true"/);
+assert.doesNotMatch(
+  G.renderNodeButtonsHtml([{ id: '<script>', text: "坏", active: false }]),
+  /<script>/
+);
 
 console.log("test_graph_panel: OK");
